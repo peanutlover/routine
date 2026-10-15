@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
 const TITLE = '웨이트트레이닝 루틴';
+const SHORT = '웨이트 루틴'; // 홈 화면 아이콘 이름
 const FONTS = [
   '<link rel="preconnect" href="https://fonts.googleapis.com">',
   '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>',
@@ -28,7 +29,7 @@ const standalone = `<!doctype html>
 <meta name="theme-color" content="#0f1114" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="${TITLE}">
+<meta name="apple-mobile-web-app-title" content="${SHORT}">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png" type="image/png">

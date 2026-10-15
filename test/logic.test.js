@@ -223,6 +223,14 @@ test('경량원판: 5kg 단위 + 나머지를 가진 원판으로 채우기 (요
   assert.equal(t(49.6, [0.5, 1]), '50kg으로 맞추기');
   assert.equal(t(46.3, [0.5, 1]), '45kg + 한쪽 1kg · 반대쪽 0.5kg → 46.5kg');
   assert.equal(L.plateMath(9, [0.5, 1], 'dumbbell'), null);
+  // 2.5kg 한 짝은 경량원판이 1.25kg뿐일 때만 (바벨). 머신은 추에 올리므로 늘 허용.
+  assert.equal(t(48, [1.25]), '45kg + 한쪽 2.5kg · 반대쪽 1.25kg → 48.75kg');   // 1.25kg뿐: 2.5kg 한 짝 허용
+  assert.equal(t(47.5, [1.25]), '45kg + 1.25kg 한 쌍');
+  assert.equal(t(46, []), '50kg으로 맞추기');                                    // 경량원판 없음: 2.5kg은 한 쌍으로만
+  assert.equal(t(47.5, [1]), '50kg으로 맞추기');
+  assert.equal(t(47.5, [0.5, 1]), '45kg + 한쪽 1kg+0.5kg · 반대쪽 1kg');
+  assert.equal(L.plateMath(48, [1, 1.25], 'barbell').pieces.includes(2.5), false);
+  assert.equal(t(47.5, [], 'machine'), '45kg + 2.5kg 한 짝');
 });
 
 test('예전 설정(첫 판)을 새 규칙으로 옮긴다', () => {
