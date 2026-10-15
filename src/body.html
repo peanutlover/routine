@@ -1,0 +1,60 @@
+<div class="boot" id="boot">
+  <h2>앱이 실행되지 않았어요</h2>
+  <p>파일 미리보기(아이폰 파일 앱, 카카오톡·메일 첨부 보기 등)에서는 화면만 보이고 앱이 동작하지 않아요.</p>
+  <p><strong>Safari나 Chrome 같은 브라우저 주소</strong>로 열어 주세요. 공유받은 링크나 직접 올린 웹 주소로 열면 돼요.</p>
+  <p id="bootErr" hidden></p>
+</div>
+<script>window.onerror = function (m) { var e = document.getElementById('bootErr'); if (e) { e.hidden = false; e.innerHTML = '오류: <code></code>'; e.firstElementChild.textContent = String(m); } };</script>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <h1 class="num"><b>5%</b> 루틴</h1>
+      <div class="status" id="status"></div>
+    </div>
+    <div class="weeknav">
+      <button class="iconbtn" id="prevWeek" type="button" aria-label="지난 주">‹</button>
+      <div class="range" id="range"></div>
+      <button class="pillbtn" id="thisWeek" type="button">이번 주</button>
+      <button class="iconbtn" id="nextWeek" type="button" aria-label="다음 주">›</button>
+    </div>
+    <div class="strip" id="strip" role="list"></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="view" id="view-week" aria-label="주간 루틴">
+    <div class="notice" id="welcome" hidden>
+      <p><strong>오늘 세션 1부터 시작하는 기본 루틴이에요.</strong> 데드리프트 40kg, 스쿼트는 그 ÷1.2로 계산했어요. 내 시작 무게가 다르면 설정에서 바꾸세요.</p>
+      <p class="small">이미 하던 루틴이 있으면 <strong>이어서 시작</strong>을 눌러 지난 날의 세션 번호와 무게를 넣으세요. 그 날 결과부터 이어서 기록해요.</p>
+      <div class="actions">
+        <button class="btn" type="button" data-act="start">이대로 시작</button>
+        <button class="btn ghost" type="button" data-act="startSheet">이어서 시작</button>
+        <button class="btn ghost" type="button" data-act="tab" data-tab="settings">시작 무게 바꾸기</button>
+      </div>
+    </div>
+    <div id="days" class="view"></div>
+  </section>
+
+  <section class="view" id="view-plan" aria-label="세션 계획" hidden>
+    <div class="legend">
+      <span>지난 세션은 실제 결과, 이후는 <strong>모두 성공한다고 가정한</strong> 예상이에요.</span>
+      <span><span class="ok-t">✓</span> 성공 · <span class="bad-t">✗</span> 실패 · 휴식 = 하체 4단계 날</span>
+    </div>
+    <div class="scroll"><table class="plan" id="planTable"></table></div>
+  </section>
+
+  <section class="view" id="view-settings" aria-label="설정" hidden></section>
+</main>
+
+<nav class="tabbar" aria-label="화면 전환">
+  <div class="in" role="tablist">
+    <button type="button" role="tab" id="tab-week" data-act="tab" data-tab="week" aria-selected="true">이번 주</button>
+    <button type="button" role="tab" id="tab-plan" data-act="tab" data-tab="plan" aria-selected="false">세션 계획</button>
+    <button type="button" role="tab" id="tab-settings" data-act="tab" data-tab="settings" aria-selected="false">설정</button>
+  </div>
+</nav>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" id="panel"></div>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>

@@ -1,0 +1,1510 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>5% 루틴</title>
+<meta name="description" content="데드리프트·스쿼트 5% 증량과 디로딩, 상체 3·4·5회 진행을 자동으로 계산하는 주간 운동 루틴">
+<meta name="theme-color" content="#edf0f3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1114" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="5% 루틴">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<script>window.ROUTINE_STANDALONE = true;</script>
+</head>
+<body>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+/* 레이아웃: 훈련 일지 한 장 — 위에 7일 띠, 아래로 요일별 줄 친 운동표, 휴대폰 하단 탭 */
+[hidden] { display: none !important; }
+:root {
+  --ground: #edf0f3;
+  --surface: #ffffff;
+  --ink: #15181c;
+  --muted: #5d6570;
+  --line: #d4d9df;
+  --soft: #e3e8ee;
+  --dl: #2456a6;       /* 20kg 원판 파랑 — 데드리프트 날 */
+  --dl-ink: #ffffff;
+  --sq: #e2a400;       /* 15kg 원판 노랑 — 스쿼트 날 */
+  --sq-ink: #2e2300;
+  --ok: #217f56;
+  --bad: #c03b34;
+  --today: #e4ebf7;
+  --shadow: 0 10px 30px rgba(20, 30, 45, .16);
+  --f-display: "Barlow Condensed", "Avenir Next Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans KR", -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0f1114; --surface: #171a1e; --ink: #e8ebee; --muted: #9aa3ad; --line: #2a2f36; --soft: #20252b;
+    --dl: #6c9bf0; --dl-ink: #0b1526; --sq: #f0c234; --sq-ink: #261c00; --ok: #4cc38a; --bad: #f07a72;
+    --today: #1a2333; --shadow: 0 10px 30px rgba(0, 0, 0, .5); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0f1114; --surface: #171a1e; --ink: #e8ebee; --muted: #9aa3ad; --line: #2a2f36; --soft: #20252b;
+  --dl: #6c9bf0; --dl-ink: #0b1526; --sq: #f0c234; --sq-ink: #261c00; --ok: #4cc38a; --bad: #f07a72;
+  --today: #1a2333; --shadow: 0 10px 30px rgba(0, 0, 0, .5); color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font: 15px/1.5 var(--f-body); -webkit-tap-highlight-color: transparent;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--dl); outline-offset: 2px; }
+.num { font-family: var(--f-display); font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+
+.wrap {
+  max-width: 760px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+/* ---------- 머리 ---------- */
+.top {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  background: color-mix(in srgb, var(--ground) 92%, transparent);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.top .wrap { padding-block: 12px 10px; display: grid; gap: 10px; }
+.brand { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.brand h1 { margin: 0; font: 700 26px/1 var(--f-display); letter-spacing: .02em; text-transform: uppercase; }
+.brand h1 b { color: var(--dl); }
+.status { font-size: 13px; color: var(--muted); text-align: right; }
+.status strong { color: var(--ink); font-weight: 600; }
+
+.weeknav { display: flex; align-items: center; gap: 8px; }
+.weeknav .range { flex: 1; font: 600 18px/1 var(--f-display); letter-spacing: .03em; }
+.iconbtn {
+  width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line);
+  background: var(--surface); display: grid; place-items: center; font-size: 16px; line-height: 1;
+}
+.pillbtn { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 12px; font-size: 13px; }
+
+.strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.strip button {
+  border: 0; border-radius: 8px; background: transparent; padding: 6px 0 7px;
+  display: grid; justify-items: center; gap: 3px; min-width: 0;
+}
+.strip .dow { font-size: 12px; color: var(--muted); }
+.strip .dnum { font: 600 17px/1 var(--f-display); }
+.strip .mark { height: 6px; width: 22px; border-radius: 3px; background: transparent; }
+.strip .is-today { background: var(--today); }
+.strip .is-today .dow { color: var(--ink); font-weight: 600; }
+.mark.D { background: var(--dl); }
+.mark.S { background: var(--sq); }
+.mark.done { box-shadow: 0 0 0 2px var(--ground), 0 0 0 3.5px var(--ok); }
+.mark.fail { box-shadow: 0 0 0 2px var(--ground), 0 0 0 3.5px var(--bad); }
+.mark.rest { background: var(--line); width: 10px; }
+.mark.miss { background: transparent; border: 1.5px dashed var(--muted); height: 7px; }
+
+/* ---------- 본문 ---------- */
+main.wrap { padding-block: 14px 120px; display: grid; gap: 14px; }
+.view[hidden] { display: none; }
+.view { display: grid; gap: 14px; min-width: 0; }
+
+.notice {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 14px 16px; display: grid; gap: 10px;
+}
+.notice p { margin: 0; }
+.notice .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.day { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; scroll-margin-top: 190px; }
+.day.is-today { border-color: var(--dl); box-shadow: 0 0 0 1px var(--dl); }
+.day.quiet { background: transparent; border-style: dashed; }
+.dayhead { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
+.daydate { display: grid; justify-items: center; min-width: 42px; }
+.daydate .dow { font: 700 22px/1 var(--f-body); }
+.daydate .md { font: 500 14px/1.2 var(--f-display); color: var(--muted); }
+.dayinfo { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.tagline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.tag { border-radius: 999px; padding: 2px 10px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.tag.D { background: var(--dl); color: var(--dl-ink); }
+.tag.S { background: var(--sq); color: var(--sq-ink); }
+.tag.rest { background: var(--soft); color: var(--muted); }
+.tag.line { border: 1px solid var(--line); color: var(--muted); font-weight: 500; }
+.tag.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.tag.bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+.tag.today { background: var(--ink); color: var(--surface); }
+.meta { font-size: 13px; color: var(--muted); }
+.daybody { border-top: 1px solid var(--line); }
+.dayfoot { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px 14px; }
+.dayfoot .hint { font-size: 13px; color: var(--muted); align-self: center; }
+
+.ex { width: 100%; border-collapse: collapse; font-size: 14px; }
+.ex th { text-align: left; font-size: 12px; font-weight: 500; color: var(--muted); padding: 8px 6px 6px; }
+.ex td { padding: 9px 6px; border-top: 1px solid var(--soft); vertical-align: middle; }
+.ex th:first-child, .ex td:first-child { padding-left: 14px; }
+.ex th:last-child, .ex td:last-child { padding-right: 14px; }
+.ex .c-w, .ex .c-r, .ex .c-t { text-align: right; white-space: nowrap; }
+.ex .c-w { font: 600 18px/1 var(--f-display); font-variant-numeric: tabular-nums; }
+.ex .c-r { font: 500 17px/1 var(--f-display); font-variant-numeric: tabular-nums; }
+.ex .c-t { font-size: 13px; color: var(--muted); }
+.ex .c-s { width: 26px; text-align: center; font-weight: 700; }
+.ex .nm { font-weight: 600; line-height: 1.3; }
+.ex .pt { font-size: 12px; color: var(--muted); }
+.ex .flag { font-size: 11px; font-weight: 600; border-radius: 4px; padding: 0 5px; margin-left: 4px; vertical-align: 1px; white-space: nowrap; }
+.flag.hold { background: var(--soft); color: var(--muted); }
+.flag.retry { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
+.ex tr.main .nm { font-size: 15px; }
+.ex tr.skip td { color: var(--muted); }
+.ex tr.with-plate td { padding-bottom: 3px; }
+.ex tr.plate td { border-top: 0; padding-top: 0; padding-bottom: 9px; font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+.pl {
+  display: inline-block; font-size: 11px; font-weight: 600; color: var(--ink); background: var(--soft);
+  border-radius: 4px; padding: 0 6px; margin-right: 6px; vertical-align: 1px;
+}
+.skipnote.balance { color: var(--ink); background: color-mix(in srgb, var(--sq) 14%, transparent); }
+.rx.pl-line { margin-top: 3px; }
+.rx.bal { margin-top: 4px; font-size: 12px; line-height: 1.45; }
+.ok-t { color: var(--ok); }
+.bad-t { color: var(--bad); }
+.unit { font-size: .72em; font-weight: 500; margin-left: 1px; }
+.skipnote { padding: 10px 14px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--soft); }
+
+.btn {
+  border: 1px solid var(--ink); background: var(--ink); color: var(--surface);
+  border-radius: 999px; padding: 9px 16px; font-weight: 600; font-size: 14px;
+}
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+.btn.danger { background: transparent; color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.block { width: 100%; padding: 13px 16px; font-size: 15px; }
+
+/* ---------- 세션 계획표 ---------- */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); }
+.scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+.plan { border-collapse: separate; border-spacing: 0; font-size: 13px; min-width: 100%; }
+.plan th, .plan td { padding: 8px 10px; border-bottom: 1px solid var(--soft); white-space: nowrap; text-align: right; }
+.plan thead th { font-weight: 500; color: var(--muted); font-size: 12px; position: sticky; top: 0; background: var(--surface); vertical-align: bottom; line-height: 1.25; }
+.plan th:first-child, .plan td:first-child { position: sticky; left: 0; background: var(--surface); text-align: left; z-index: 1; border-right: 1px solid var(--line); }
+.plan .sno { font: 700 17px/1 var(--f-display); }
+.plan .sdate { font-size: 11px; color: var(--muted); }
+.plan .w { font: 600 15px/1 var(--f-display); font-variant-numeric: tabular-nums; }
+.plan .rp { color: var(--muted); font-size: 12px; }
+.plan tr.cur td { background: var(--today); }
+.plan tr.cur td:first-child { box-shadow: inset 3px 0 0 var(--dl); }
+.plan tr.proj td { color: var(--muted); }
+.plan tr.proj .w { color: var(--ink); opacity: .72; }
+.plan .stage { font-size: 12px; color: var(--muted); }
+.plan td.rest { color: var(--muted); font-size: 12px; }
+.plan .res { font-weight: 700; margin-left: 3px; }
+.plan tr.bundle-start td { border-top: 2px solid var(--line); }
+
+/* ---------- 설정 ---------- */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 14px; min-width: 0; }
+.card h2 { margin: 0; font-size: 16px; }
+.card p { margin: 0; }
+.small { font-size: 13px; color: var(--muted); }
+.field { display: grid; gap: 6px; }
+.field > span { font-size: 13px; color: var(--muted); }
+.field input, .field select, .field textarea {
+  width: 100%; min-width: 0; border: 1px solid var(--line); background: var(--ground); border-radius: 8px; padding: 9px 10px;
+}
+.field textarea { min-height: 96px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.plates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.plates label { position: relative; }
+.plates input { position: absolute; opacity: 0; inset: 0; }
+.plates span { display: block; text-align: center; padding: 9px 0; border-radius: 8px; border: 1px solid var(--line); font: 600 17px/1 var(--f-display); }
+.plates input:checked + span { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.plates input:focus-visible + span { outline: 2px solid var(--dl); outline-offset: 2px; }
+.swbox { display: grid; gap: 10px; padding: 12px; border-radius: 8px; background: var(--ground); border: 1px solid var(--line); }
+.swbox .field input, .swbox .field select { background: var(--surface); }
+.plan thead th.wrap-h { white-space: normal; min-width: 76px; }
+.check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; }
+.check input { margin-top: 4px; width: 18px; height: 18px; flex: none; }
+.acc { border-top: 1px solid var(--line); padding-top: 14px; display: grid; gap: 10px; }
+.acc-head { display: flex; align-items: center; gap: 8px; }
+.acc-head .tag { flex: none; }
+.acc-head input { flex: 1; min-width: 0; font-weight: 600; border: 1px solid var(--line); background: var(--ground); border-radius: 8px; padding: 8px 10px; }
+.derived { font-size: 13px; color: var(--muted); min-height: 42px; display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
+.derived b { color: var(--ink); font-family: var(--f-display); font-size: 16px; }
+.rules { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; }
+.btnrow { display: flex; flex-wrap: wrap; gap: 8px; }
+.confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--bad) 10%, transparent); }
+
+/* ---------- 기록 시트 ---------- */
+.sheet { position: fixed; inset: 0; z-index: 50; display: grid; align-items: end; justify-items: center; background: rgba(10, 14, 20, .42); }
+.sheet[hidden] { display: none; }
+.panel {
+  width: 100%; max-width: 560px; max-height: 88vh; overflow-y: auto; background: var(--surface);
+  border-radius: 18px 18px 0 0; box-shadow: var(--shadow);
+  padding: 18px max(16px, env(safe-area-inset-right, 0px)) calc(18px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  display: grid; gap: 14px;
+}
+@media (min-width: 600px) { .sheet { align-items: center; } .panel { border-radius: 18px; } }
+.panel h2 { margin: 0; font-size: 18px; }
+.panel .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.lrows { display: grid; gap: 8px; }
+.lrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--soft); }
+.lrow .nm { font-weight: 600; line-height: 1.3; }
+.lrow .rx { font-size: 13px; color: var(--muted); }
+.lrow .rx b { font-family: var(--f-display); font-size: 16px; color: var(--ink); font-weight: 600; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.seg button { border: 0; background: transparent; padding: 8px 14px; font-weight: 600; font-size: 14px; color: var(--muted); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"].y { background: var(--ok); color: #fff; }
+.seg button[aria-pressed="true"].n { background: var(--bad); color: #fff; }
+
+/* ---------- 시작 지점 ---------- */
+.startsum { font-size: 14px; }
+.startsum b { font-weight: 600; }
+.stacc { display: grid; border-top: 1px solid var(--line); }
+.sthead { font-weight: 600; padding: 10px 0 2px; }
+.sthead span { font-weight: 400; font-size: 13px; color: var(--muted); }
+.strow { display: grid; gap: 8px; padding: 10px 0 12px; border-bottom: 1px solid var(--soft); }
+.stname { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.stname b { font-weight: 600; }
+.note { padding: 8px 10px; border-radius: 8px; background: var(--soft); }
+.err { color: var(--bad); font-weight: 600; }
+
+/* ---------- 탭, 토스트 ---------- */
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  border-top: 1px solid var(--line);
+  padding: 6px max(16px, env(safe-area-inset-right, 0px)) calc(6px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+}
+.tabbar .in { max-width: 520px; margin: 0 auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.tabbar button { border: 0; background: transparent; border-radius: 10px; padding: 9px 4px; font-weight: 600; font-size: 14px; color: var(--muted); }
+.tabbar button[aria-selected="true"] { color: var(--ink); background: var(--soft); }
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%); z-index: 60;
+  bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  background: var(--ink); color: var(--surface); border-radius: 999px; padding: 10px 18px; font-size: 14px;
+  box-shadow: var(--shadow); max-width: calc(100% - 32px); text-align: center;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .panel { animation: rise .22s ease-out; }
+  @keyframes rise { from { transform: translateY(24px); opacity: .6; } to { transform: none; opacity: 1; } }
+}
+@media (max-width: 380px) {
+  .ex .c-t { display: none; }
+  .ex th, .ex td { padding-left: 4px; padding-right: 4px; }
+}
+
+/* 스크립트가 돌지 않는 곳(파일 미리보기 등)에서만 남는 안내. 앱이 그려지면 지운다 */
+.boot {
+  position: fixed; inset: 0; z-index: 100; background: var(--ground); color: var(--ink);
+  display: grid; place-content: center; gap: 12px; padding: 24px 16px; text-align: center;
+  font-family: var(--f-body); line-height: 1.6;
+}
+.boot h2 { margin: 0; font-size: 18px; }
+.boot p { margin: 0; color: var(--muted); font-size: 14px; max-width: 32em; }
+.boot code { font-size: 12px; word-break: break-all; }
+</style>
+<div class="boot" id="boot">
+  <h2>앱이 실행되지 않았어요</h2>
+  <p>파일 미리보기(아이폰 파일 앱, 카카오톡·메일 첨부 보기 등)에서는 화면만 보이고 앱이 동작하지 않아요.</p>
+  <p><strong>Safari나 Chrome 같은 브라우저 주소</strong>로 열어 주세요. 공유받은 링크나 직접 올린 웹 주소로 열면 돼요.</p>
+  <p id="bootErr" hidden></p>
+</div>
+<script>window.onerror = function (m) { var e = document.getElementById('bootErr'); if (e) { e.hidden = false; e.innerHTML = '오류: <code></code>'; e.firstElementChild.textContent = String(m); } };</script>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <h1 class="num"><b>5%</b> 루틴</h1>
+      <div class="status" id="status"></div>
+    </div>
+    <div class="weeknav">
+      <button class="iconbtn" id="prevWeek" type="button" aria-label="지난 주">‹</button>
+      <div class="range" id="range"></div>
+      <button class="pillbtn" id="thisWeek" type="button">이번 주</button>
+      <button class="iconbtn" id="nextWeek" type="button" aria-label="다음 주">›</button>
+    </div>
+    <div class="strip" id="strip" role="list"></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="view" id="view-week" aria-label="주간 루틴">
+    <div class="notice" id="welcome" hidden>
+      <p><strong>오늘 세션 1부터 시작하는 기본 루틴이에요.</strong> 데드리프트 40kg, 스쿼트는 그 ÷1.2로 계산했어요. 내 시작 무게가 다르면 설정에서 바꾸세요.</p>
+      <p class="small">이미 하던 루틴이 있으면 <strong>이어서 시작</strong>을 눌러 지난 날의 세션 번호와 무게를 넣으세요. 그 날 결과부터 이어서 기록해요.</p>
+      <div class="actions">
+        <button class="btn" type="button" data-act="start">이대로 시작</button>
+        <button class="btn ghost" type="button" data-act="startSheet">이어서 시작</button>
+        <button class="btn ghost" type="button" data-act="tab" data-tab="settings">시작 무게 바꾸기</button>
+      </div>
+    </div>
+    <div id="days" class="view"></div>
+  </section>
+
+  <section class="view" id="view-plan" aria-label="세션 계획" hidden>
+    <div class="legend">
+      <span>지난 세션은 실제 결과, 이후는 <strong>모두 성공한다고 가정한</strong> 예상이에요.</span>
+      <span><span class="ok-t">✓</span> 성공 · <span class="bad-t">✗</span> 실패 · 휴식 = 하체 4단계 날</span>
+    </div>
+    <div class="scroll"><table class="plan" id="planTable"></table></div>
+  </section>
+
+  <section class="view" id="view-settings" aria-label="설정" hidden></section>
+</main>
+
+<nav class="tabbar" aria-label="화면 전환">
+  <div class="in" role="tablist">
+    <button type="button" role="tab" id="tab-week" data-act="tab" data-tab="week" aria-selected="true">이번 주</button>
+    <button type="button" role="tab" id="tab-plan" data-act="tab" data-tab="plan" aria-selected="false">세션 계획</button>
+    <button type="button" role="tab" id="tab-settings" data-act="tab" data-tab="settings" aria-selected="false">설정</button>
+  </div>
+</nav>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" id="panel"></div>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+/* 5% 루틴 — 진행 로직 (순수 함수). 브라우저(index.html)와 Node 테스트에서 함께 사용한다. */
+const RoutineLogic = (() => {
+  'use strict';
+
+  const DAY = 86400000;
+  const SLOTS = 6;          // 세션 = 운동 6회 (데드·스쿼트 번갈아 3회씩)
+  const MAIN_STAGES = 4;    // 하체 묶음 = 4세션
+  const ACC_TOP = 2;        // 상체 사다리 = 3단계 (0·1·2)
+  const LIGHT = { under: 20, reps: 5, step: 2, add: 5 }; // 20kg 미만: 5·7·9회, 묶음 성공 시 +5kg
+  const PLATE_OPTIONS = [0.25, 0.5, 1, 1.25, 1.5, 2];  // 고를 수 있는 경량원판(종류별 한 쌍)
+
+  // ---------- 날짜 (UTC 일 번호로 계산해 서머타임 영향 없음) ----------
+  const pad = (x) => String(x).padStart(2, '0');
+  function toNum(s) { const [y, m, d] = s.split('-').map(Number); return Math.round(Date.UTC(y, m - 1, d) / DAY); }
+  function toStr(n) { const t = new Date(n * DAY); return t.getUTCFullYear() + '-' + pad(t.getUTCMonth() + 1) + '-' + pad(t.getUTCDate()); }
+  function weekday(n) { return new Date(n * DAY).getUTCDay(); } // 0=일 … 6=토
+  function mondayOf(n) { return n - ((weekday(n) + 6) % 7); }
+  function localToday(now = new Date()) { return now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()); }
+
+  // ---------- 기본 설정 ----------
+  // equip: barbell(원판 계산·좌우 균형) / machine(무게 추에 원판 올리기) / dumbbell(계산 없음)
+  // sw: 무게가 at에 이르는 시점에 다른 종목으로 바꿔 w부터 다시 시작 (가슴: 덤벨프레스 → 바벨 벤치프레스)
+  // from: 시작 지점. 시작일에 하는 운동이 세션 no의 k번째(0부터) 운동이고, 그 세션의 하체 단계가 stage(1~4).
+  //       시작 무게(main.dl, acc[].w)는 이 세션의 무게. acc[id]에는 상체·팔의 횟수 단계(step·done·phase·n)를 따로 둘 수 있다.
+  function defaultConfig(today) {
+    return {
+      cv: 2,
+      startDate: today,
+      from: { no: 1, k: 0, stage: 1, acc: {} },
+      plates: [0.5, 1],
+      main: { dl: 40, ratio: 1.2, pct: 5, reps: 5, sets: 3, rest: '5~8분' },
+      acc: [
+        { id: 'lat', name: '랫풀다운', part: '등', day: 'D', equip: 'machine', w: 23, reps: 3, sets: 3, rest: '3~5분', inc: 'pct', incV: 5, light: false, from: 1, sw: null },
+        { id: 'curl', name: '덤벨컬', part: '이두', day: 'D', equip: 'dumbbell', w: 3, reps: 5, sets: 3, rest: '2분', inc: 'kg', incV: 1, light: false, from: 1, sw: null },
+        { id: 'ohp', name: 'OHP', part: '어깨', day: 'D', equip: 'barbell', w: 10, reps: 3, sets: 3, rest: '3~5분', inc: 'pct', incV: 5, light: true, from: 1, sw: null },
+        { id: 'press', name: '덤벨프레스', part: '가슴', day: 'S', equip: 'dumbbell', w: 7, reps: 3, sets: 3, rest: '3~5분', inc: 'kg', incV: 1, light: false, from: 1,
+          sw: { at: 10, name: '바벨 벤치프레스', w: 20, inc: 'pct', incV: 5 } },
+        { id: 'tri', name: '케이블 트라이셉스 익스텐션', part: '삼두', day: 'S', equip: 'machine', w: null, reps: 5, sets: 3, rest: '2분', inc: 'kg', incV: 1, light: false, from: 1, sw: null },
+        { id: 'side', name: '사이드 레터럴 레이즈', part: '어깨', day: 'S', equip: 'dumbbell', w: 2, reps: 10, sets: 3, rest: '1분', inc: 'kg', incV: 1, light: false, from: 1, sw: null },
+        { id: 'rear', name: '벤트오버 레터럴 레이즈', part: '후면 어깨', day: 'S', equip: 'dumbbell', w: 2, reps: 10, sets: 3, rest: '1분', inc: 'kg', incV: 1, light: false, from: 1, sw: null },
+      ],
+    };
+  }
+
+  // 첫 판(cv 없음)으로 저장된 설정을 지금 규칙으로 옮긴다:
+  // 고정 쉬는 요일·표시 단위 없앰, 가슴은 덤벨 1kg 증량 후 벤치프레스로 전환, 레터럴 레이즈 1kg 증량, 기구 종류·경량원판 추가.
+  function migrate(cfg) {
+    if (cfg.cv >= 2) return cfg;
+    const defs = Object.fromEntries(defaultConfig(cfg.startDate).acc.map((a) => [a.id, a]));
+    cfg.acc = cfg.acc.map((a) => {
+      const def = defs[a.id];
+      const b = Object.assign({ sw: null }, a);
+      if (!b.equip) b.equip = def ? def.equip : 'dumbbell';
+      if (def && (a.id === 'press' || a.id === 'side' || a.id === 'rear')) Object.assign(b, { inc: def.inc, incV: def.incV, light: def.light, sw: def.sw });
+      return b;
+    });
+    if (!Array.isArray(cfg.plates)) cfg.plates = [0.5, 1];
+    delete cfg.trainDays;
+    delete cfg.roundTo;
+    cfg.cv = 2;
+    return cfg;
+  }
+
+  // ---------- 상태 머신 ----------
+  // main.level: 데드리프트 = 시작무게 × 1.05^level. 묶음 = level start..start+3, 4번째(최고 중량)가 "4세션".
+  // acc.step: 0·1·2 사다리 위치(실패하면 음수까지 내려감). done = 사다리 끝(3단계) 성공, 하체 묶음 완료 시 증량 대기.
+  const toInt = (v, lo, hi, dflt) => { const n = Math.floor(Number(v)); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt; };
+  function startPoint(cfg) {
+    const f = (cfg && cfg.from) || {};
+    return {
+      no: toInt(f.no, 1, 9999, 1), k: toInt(f.k, 0, SLOTS - 1, 0), stage: toInt(f.stage, 1, MAIN_STAGES, 1),
+      acc: f.acc && typeof f.acc === 'object' ? f.acc : {},
+    };
+  }
+  // 상체·팔 사다리의 기본 위치는 하체 단계와 나란히 간다: 1~3단계 = 첫·둘째·셋째 횟수, 4단계 = 쉬는 날(셋째 횟수까지 성공, 증량 대기).
+  function accAt(stage) { return stage >= MAIN_STAGES ? { step: ACC_TOP, done: true } : { step: stage - 1, done: false }; }
+
+  function initState(cfg) {
+    const sp = startPoint(cfg);
+    const acc = {};
+    for (const a of cfg.acc) {
+      const o = Object.assign((a.from || 1) > sp.no ? accAt(1) : accAt(sp.stage), sp.acc[a.id] || {});
+      const step = toInt(o.step, -9, ACC_TOP, 0);
+      acc[a.id] = { w: a.w == null ? null : a.w, n: toInt(o.n, 0, 999, 0), step, done: !!o.done && step === ACC_TOP, fail: false, phase: a.sw && o.phase ? 1 : 0 };
+    }
+    const bundle = Math.max(1, Math.floor((sp.no - sp.stage) / MAIN_STAGES) + 1);
+    return { main: { level: 0, start: 1 - sp.stage, bundle, fail: false }, acc };
+  }
+
+  // 전환 뒤에는 이름·증량·기구가 바뀐 종목으로 본다.
+  function eff(a, s) {
+    if (!s.phase || !a.sw) return a;
+    return Object.assign({}, a, { name: a.sw.name, inc: a.sw.inc, incV: a.sw.incV, equip: 'barbell' });
+  }
+  function isLight(a, s) { return !!a.light && s.w != null && s.w < LIGHT.under - 1e-9; }
+  function ladderReps(a, s) {
+    return isLight(a, s) ? Math.max(1, LIGHT.reps + LIGHT.step * s.step) : Math.max(1, a.reps + s.step);
+  }
+
+  function prescribe(cfg, st, no) {
+    const m = st.main;
+    const top = m.level === m.start + MAIN_STAGES - 1;
+    const dl = cfg.main.dl * Math.pow(1 + cfg.main.pct / 100, m.level);
+    const main = { dl, sq: dl / cfg.main.ratio, level: m.level, bundle: m.bundle, stage: m.level - m.start + 1, top, retry: m.fail };
+    const acc = {};
+    for (const a of cfg.acc) {
+      const s = st.acc[a.id];
+      if (!s || no < (a.from || 1)) { acc[a.id] = { off: true }; continue; }
+      if (top) { acc[a.id] = { skip: true }; continue; }
+      const e = eff(a, s);
+      acc[a.id] = {
+        name: e.name, equip: e.equip, inc: e.inc, incV: e.incV, phase: s.phase,
+        w: s.w, n: s.n, reps: ladderReps(a, s), step: s.step, hold: s.done, retry: s.fail, light: isLight(a, s),
+      };
+    }
+    return { no, main, acc };
+  }
+
+  // entries: 세션의 운동일들 [{type:'D'|'S', res:{종목id: true|false}}]. 기록이 없는 결과는 성공으로 본다.
+  function evaluate(cfg, presc, entries) {
+    let main = true;
+    const acc = {};
+    for (const a of cfg.acc) { const p = presc.acc[a.id]; acc[a.id] = p.off || p.skip ? null : true; }
+    for (const e of entries) {
+      const r = e.res || {};
+      if (r[e.type === 'D' ? 'dl' : 'sq'] === false) main = false;
+      for (const a of cfg.acc) if (a.day === e.type && acc[a.id] !== null && r[a.id] === false) acc[a.id] = false;
+    }
+    return { main, acc };
+  }
+
+  function raise(a, s) {
+    if (s.w == null) return { w: null, phase: s.phase };
+    const e = eff(a, s);
+    const w = isLight(a, s) ? s.w + LIGHT.add : e.inc === 'kg' ? s.w + e.incV : s.w * (1 + e.incV / 100);
+    if (!s.phase && a.sw && w >= a.sw.at - 1e-9) return { w: a.sw.w, phase: 1 };
+    return { w, phase: s.phase };
+  }
+
+  function advance(cfg, st, out) {
+    const nx = JSON.parse(JSON.stringify(st));
+    const m = nx.main;
+    let bundleDone = false;
+    if (out.main) {
+      if (m.level === m.start + MAIN_STAGES - 1) { m.start += 1; m.level = m.start; m.bundle += 1; bundleDone = true; }
+      else m.level += 1;
+      m.fail = false;
+    } else {
+      m.level -= 1; m.fail = true;
+    }
+    for (const a of cfg.acc) {
+      const s = nx.acc[a.id], r = out.acc[a.id];
+      if (!s || r == null) continue;
+      if (r) { if (s.step < ACC_TOP) s.step += 1; else s.done = true; s.fail = false; }
+      else { s.step -= 1; s.done = false; s.fail = true; }
+    }
+    if (bundleDone) {
+      for (const a of cfg.acc) {
+        const s = nx.acc[a.id];
+        if (!s || !s.done) continue;
+        const up = raise(a, s);
+        s.w = up.w; s.phase = up.phase; s.n += 1; s.step = 0; s.done = false;
+      }
+    }
+    return nx;
+  }
+
+  const slotType = (i) => (i % 2 === 0 ? 'D' : 'S');
+
+  // 기록을 시작 지점부터 다시 돌려 세션별 처방을 만든다. 마지막 원소가 진행 중인(또는 다음) 세션.
+  // 시작 세션은 k번째 운동부터 기록하고, 그 앞 운동(앱을 쓰기 전에 한 것)은 성공으로 본다. first = 세션에서 첫 기록의 순서.
+  function replay(cfg, logs) {
+    const sp = startPoint(cfg);
+    const sessions = [];
+    let st = initState(cfg);
+    let i = 0;
+    for (let no = sp.no; ; no++) {
+      const first = no === sp.no ? sp.k : 0;
+      const need = SLOTS - first;
+      const chunk = logs.slice(i, i + need);
+      const presc = prescribe(cfg, st, no);
+      const sess = { no, first, state: st, presc, logs: chunk, done: chunk.length === need };
+      sessions.push(sess);
+      if (!sess.done) break;
+      i += need;
+      sess.out = evaluate(cfg, presc, chunk.map((lg, j) => ({ type: slotType(first + j), res: lg.res })));
+      st = advance(cfg, st, sess.out);
+    }
+    return sessions;
+  }
+
+  const ALL_OK = [{ type: 'D', res: {} }, { type: 'S', res: {} }];
+
+  // 진행 중인 세션 이후를 "남은 운동은 모두 성공"으로 가정해 예상한다.
+  function future(cfg, sessions, count) {
+    const cur = sessions[sessions.length - 1];
+    const entries = cur.logs.map((lg, j) => ({ type: slotType(cur.first + j), res: lg.res }));
+    let st = advance(cfg, cur.state, evaluate(cfg, cur.presc, entries));
+    const out = [];
+    for (let j = 1; j <= count; j++) {
+      const presc = prescribe(cfg, st, cur.no + j);
+      out.push({ no: cur.no + j, first: 0, state: st, presc, logs: [], projected: true });
+      st = advance(cfg, st, evaluate(cfg, presc, ALL_OK));
+    }
+    return out;
+  }
+
+  // 지금 시작 지점에서 모든 세션을 성공한다고 보고 세션 no의 상태·처방을 구한다. 시작 세션보다 앞이면 null.
+  // 이미 하던 루틴을 이어서 시작할 때 무게·횟수를 미리 채우는 데 쓴다.
+  function projectTo(cfg, no) {
+    const sp = startPoint(cfg);
+    if (!(no >= sp.no)) return null;
+    let st = initState(cfg);
+    for (let n = sp.no; n < no; n++) st = advance(cfg, st, evaluate(cfg, prescribe(cfg, st, n), ALL_OK));
+    return { state: st, presc: prescribe(cfg, st, no) };
+  }
+
+  // ---------- 달력 ----------
+  // 고정 쉬는 요일 없음. 세션의 6번째 운동 다음 날만 쉰다.
+  // kind: log(기록됨) plan(예정) gap(세션 간 휴식) miss(지난 날, 기록 없음 = 쉰 날). 시작일 이전은 맵에 없음.
+  // slot: 시작 세션의 첫 운동을 0으로 센 칸 번호. i번째 기록의 칸 = 시작 지점의 k + i.
+  function timeline(cfg, logs, today, opts = {}) {
+    const days = new Map();
+    const slotDate = [];
+    const k0 = startPoint(cfg).k;
+    const start = toNum(cfg.startDate);
+    const T = toNum(today);
+    let last = null;
+    logs.forEach((lg, i) => { const d = toNum(lg.d); days.set(d, { kind: 'log', slot: k0 + i }); slotDate[k0 + i] = d; last = d; });
+    logs.forEach((lg, i) => {
+      if ((k0 + i + 1) % SLOTS !== 0) return;
+      const g = toNum(lg.d) + 1;
+      if (!days.has(g)) days.set(g, { kind: 'gap' });
+    });
+    const cursor = Math.max(T, start, last == null ? -Infinity : last + 1);
+    for (let d = start; d < cursor; d++) if (!days.has(d)) days.set(d, { kind: 'miss' });
+    let idx = k0 + logs.length;
+    let forced = logs.length > 0 && idx % SLOTS === 0 ? last + 1 : null;
+    const until = opts.until == null ? cursor + 6 : opts.until;
+    const minSlots = opts.minSlots || 0;
+    for (let d = cursor, guard = 0; (d <= until || idx < minSlots) && guard < 4000; d++, guard++) {
+      if (d === forced) { if (!days.has(d)) days.set(d, { kind: 'gap' }); continue; }
+      days.set(d, { kind: 'plan', slot: idx });
+      slotDate[idx] = d;
+      idx += 1;
+      if (idx % SLOTS === 0) forced = d + 1;
+    }
+    return { days, slotDate, start, cursor, today: T, last, k0 };
+  }
+
+  // 그 날짜에 "다음 운동"을 기록할 수 있는가: 오늘의 예정일, 또는 마지막 기록 이후의 지난 날.
+  // 지나간 휴식일도 실제로 운동했다면 기록할 수 있다 (지난 기록을 이어서 넣을 때).
+  function canLog(tl, d) {
+    const e = tl.days.get(d);
+    if (!e || d > tl.today) return false;
+    if (tl.last != null && d <= tl.last) return false;
+    return e.kind === 'plan' || e.kind === 'miss' || (e.kind === 'gap' && d < tl.today);
+  }
+
+  // 칸 번호 → 세션 번호, 세션 안 순서(0~5)
+  function slotNo(cfg, g) { return startPoint(cfg).no + Math.floor(g / SLOTS); }
+  function slotPos(g) { return ((g % SLOTS) + SLOTS) % SLOTS; }
+
+  // ---------- 경량원판 ----------
+  // 5kg 단위는 일반 원판으로 끼우고, 나머지를 가진 경량원판(종류별 한 쌍)과 2.5kg 원판(한 짝도 가능)으로 채운다.
+  // 고르는 순서: 목표 무게 이상이면서 가장 가벼운 조합 → (바벨) 양쪽 무게 차이가 작은 조합 → 원판 수가 적은 조합.
+  const plateMemo = new Map();
+  function plateMath(target, plates, equip) {
+    if (!(target > 0) || (equip !== 'barbell' && equip !== 'machine')) return null;
+    const key = target + '|' + (plates || []).join(',') + '|' + equip;
+    if (plateMemo.has(key)) return plateMemo.get(key);
+    const T = Math.round(target * 100);          // 0.01kg 단위 정수로 계산
+    const base = Math.floor(T / 500) * 500;
+    const r = T - base;
+    let result = null;
+    if (r > 0) {
+      const kinds = [250].concat([...new Set((plates || []).map((p) => Math.round(p * 100)))].filter((p) => p > 0 && p < 250).sort((a, b) => b - a));
+      let min = Infinity;
+      const combos = [];
+      const walk = (i, total, pieces) => {
+        if (i === kinds.length) {
+          if (total < r) return;
+          if (total < min) { min = total; combos.length = 0; }
+          if (total === min) combos.push(pieces.slice());
+          return;
+        }
+        for (let c = 0; c <= 2; c++) {
+          for (let k = 0; k < c; k++) pieces.push(kinds[i]);
+          walk(i + 1, total + c * kinds[i], pieces);
+          pieces.length -= c;
+        }
+      };
+      walk(0, 0, []);
+      let best = null;
+      for (const pieces of combos) {
+        let A = pieces, B = [], diff = 0;
+        if (equip === 'barbell') {
+          let bestMask = 0;
+          diff = Infinity;
+          for (let mask = 0; mask < 1 << pieces.length; mask++) {
+            let a = 0;
+            for (let j = 0; j < pieces.length; j++) if (mask & (1 << j)) a += pieces[j];
+            const d = Math.abs(min - 2 * a);
+            if (d < diff) { diff = d; bestMask = mask; }
+          }
+          const L = [], R = [];
+          pieces.forEach((p, j) => ((bestMask & (1 << j) ? L : R).push(p)));
+          const sl = L.reduce((x, y) => x + y, 0);
+          [A, B] = sl * 2 >= min ? [L, R] : [R, L];
+        }
+        const cand = { A, B, diff, count: pieces.length, pieces };
+        const better = !best || (equip === 'barbell' ? cand.diff - best.diff || cand.count - best.count : cand.count - best.count) < 0;
+        if (better) best = cand;
+      }
+      const kg = (x) => x / 100;
+      const desc = (arr) => arr.map(kg).sort((x, y) => y - x);
+      result = {
+        equip, target: kg(T), base: kg(base), extra: kg(min), actual: kg(base + min), over: kg(min - r),
+        pieces: desc(best.pieces), A: desc(best.A), B: desc(best.B), unbalanced: equip === 'barbell' && best.diff > 0,
+      };
+    }
+    plateMemo.set(key, result);
+    return result;
+  }
+
+  function plateText(sol) {
+    if (!sol) return null;
+    const kg = (x) => Number(x.toFixed(2)) + 'kg';
+    const group = (arr) => { const m = new Map(); for (const p of arr) m.set(p, (m.get(p) || 0) + 1); return [...m]; };
+    if (sol.extra === 5) return `${kg(sol.base + 5)}으로 맞추기`;
+    let body;
+    if (sol.equip === 'machine') body = group(sol.pieces).map(([p, n]) => `${kg(p)} ${n === 2 ? '두 짝' : '한 짝'}`).join(' + ');
+    else {
+      const same = sol.A.length === sol.B.length && sol.A.every((p, i) => p === sol.B[i]);
+      if (same) body = group(sol.A).map(([p, n]) => `${kg(p)} ${n === 1 ? '한 쌍' : n + '쌍'}`).join(' + ');
+      else if (!sol.B.length && sol.A.length === 1) body = `${kg(sol.A[0])} 한 짝(한쪽만)`;
+      else body = `한쪽 ${sol.A.map(kg).join('+')} · 반대쪽 ${sol.B.length ? sol.B.map(kg).join('+') : '없음'}`;
+    }
+    return `${sol.base ? kg(sol.base) + ' + ' : ''}${body}${sol.over > 0 ? ` → ${kg(sol.actual)}` : ''}`;
+  }
+
+  // ---------- 표시용 ----------
+  function dayRows(cfg, presc, type) {
+    const mm = presc.main;
+    const rows = [{
+      id: type === 'D' ? 'dl' : 'sq', name: type === 'D' ? '데드리프트' : '스쿼트', part: '하체', main: true, equip: 'barbell',
+      w: type === 'D' ? mm.dl : mm.sq, n: 0, reps: cfg.main.reps, sets: cfg.main.sets, rest: cfg.main.rest, retry: mm.retry,
+    }];
+    for (const a of cfg.acc) {
+      if (a.day !== type) continue;
+      const p = presc.acc[a.id];
+      if (p.off) continue;
+      if (p.skip) { rows.push({ id: a.id, name: a.name, part: a.part, skip: true }); continue; }
+      rows.push({
+        id: a.id, name: p.name, part: a.part, equip: p.equip, phase: p.phase, w: p.w, n: p.n, inc: p.inc, incV: p.incV,
+        reps: p.reps, sets: a.sets, rest: a.rest, hold: p.hold, retry: p.retry, light: p.light,
+      });
+    }
+    return rows;
+  }
+
+  function roundW(w, unit = 0.1) {
+    const u = unit > 0 ? unit : 0.1;
+    return Number((Math.round(w / u + 1e-9) * u).toFixed(2));
+  }
+
+  function fmtW(row, unit = 0.1) {
+    if (row.w != null) return roundW(row.w, unit) + 'kg';
+    if (!row.n) return '—';
+    if (row.inc === 'kg') return '+' + Number((row.n * row.incV).toFixed(2)) + 'kg';
+    return '+' + Math.round((Math.pow(1 + row.incV / 100, row.n) - 1) * 100) + '%';
+  }
+
+  return {
+    SLOTS, MAIN_STAGES, ACC_TOP, LIGHT, PLATE_OPTIONS, toNum, toStr, weekday, mondayOf, localToday, defaultConfig, migrate,
+    startPoint, accAt, initState, prescribe, evaluate, advance, replay, future, projectTo, timeline, canLog, slotType, slotNo, slotPos,
+    ladderReps, eff, dayRows, roundW, fmtW, plateMath, plateText,
+  };
+})();
+
+if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLogic;
+
+/* 5% 루틴 — 화면과 저장. 로직은 RoutineLogic(logic.js)에 있다. */
+(() => {
+  'use strict';
+  const L = RoutineLogic;
+  const KEY = 'routine5.v1';
+  const DOW = ['일', '월', '화', '수', '목', '금', '토'];
+  const TYPE_NAME = { D: '데드리프트', S: '스쿼트' };
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  let today = L.localToday();
+  let data = loadLocal() || fresh();
+  let tab = 'week';
+  let weekMon = L.mondayOf(L.toNum(today));
+  let sheet = null;          // { mode:'new'|'edit', day, slot, res, confirmDel }
+  let pendingDel = null;     // 설정에서 삭제 확인 대기 중인 보조 종목 id
+  let confirmReset = false;
+  let remote = null;         // Claude 계정 저장소(db) 문서, 없으면 이 기기에만 저장
+  let toastTimer = 0;
+
+  function fresh() { return { v: 1, updatedAt: 0, started: false, cfg: L.defaultConfig(today), logs: [] }; }
+
+  // ---------- 저장 ----------
+  function loadLocal() {
+    try { const raw = localStorage.getItem(KEY); return raw ? sanitize(JSON.parse(raw)) : null; } catch (e) { return null; }
+  }
+  function saveLocal() {
+    try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) { /* 저장소를 쓸 수 없는 환경 */ }
+  }
+  function sanitize(x) {
+    if (!x || typeof x !== 'object' || !x.cfg || !Array.isArray(x.logs)) return null;
+    const base = L.defaultConfig(today);
+    const c = L.migrate(JSON.parse(JSON.stringify(x.cfg)));
+    const EQUIP = ['barbell', 'machine', 'dumbbell'];
+    const cfg = {
+      cv: c.cv,
+      startDate: /^\d{4}-\d{2}-\d{2}$/.test(c.startDate) ? c.startDate : today,
+      from: sanitizeFrom(c.from),
+      plates: Array.isArray(c.plates) ? c.plates.filter((p) => L.PLATE_OPTIONS.includes(p)) : base.plates,
+      main: Object.assign({}, base.main, c.main || {}),
+      acc: Array.isArray(c.acc)
+        ? c.acc.filter((a) => a && a.id && (a.day === 'D' || a.day === 'S')).map((a) => {
+          const b = Object.assign({ name: '종목', part: '', equip: 'dumbbell', w: null, reps: 5, sets: 3, rest: '', inc: 'pct', incV: 5, light: false, from: 1, sw: null }, a);
+          if (!EQUIP.includes(b.equip)) b.equip = 'dumbbell';
+          if (b.sw && !(b.sw.at > 0 && b.sw.w > 0)) b.sw = null;
+          return b;
+        })
+        : base.acc,
+    };
+    const seen = new Set();
+    const logs = x.logs
+      .filter((l) => l && /^\d{4}-\d{2}-\d{2}$/.test(l.d) && !seen.has(l.d) && seen.add(l.d))
+      .map((l) => ({ d: l.d, res: l.res && typeof l.res === 'object' ? l.res : {} }))
+      .sort((a, b) => (a.d < b.d ? -1 : 1));
+    return { v: 1, updatedAt: +x.updatedAt || 0, started: !!x.started || logs.length > 0, cfg, logs };
+  }
+  // 시작 지점: 적힌 값만 남긴다 (빠진 상체 단계는 하체 단계에 맞춘 기본값을 쓴다).
+  function sanitizeFrom(f) {
+    const sp = L.startPoint({ from: f });
+    const acc = {};
+    for (const [id, o] of Object.entries(sp.acc)) {
+      if (!o || typeof o !== 'object') continue;
+      const b = {};
+      if (Number.isFinite(Number(o.step)) && o.step !== null && o.step !== '') b.step = Math.max(-9, Math.min(L.ACC_TOP, Math.floor(o.step)));
+      if (o.done != null) b.done = !!o.done;
+      if (o.phase) b.phase = 1;
+      if (Number(o.n) > 0) b.n = Math.floor(o.n);
+      acc[id] = b;
+    }
+    return { no: sp.no, k: sp.k, stage: sp.stage, acc };
+  }
+
+  let writing = false, again = false;
+  async function pushRemote() {
+    if (!remote) return;
+    if (writing) { again = true; return; }
+    writing = true;
+    try { await remote.set(JSON.parse(JSON.stringify(data))); }
+    catch (e) {
+      const code = e && e.code;
+      if (code === 'unavailable') { again = true; await new Promise((r) => setTimeout(r, 800 + Math.random() * 800)); }
+      else { remote = null; renderSettingsStorage(); }
+    }
+    writing = false;
+    if (again && remote) { again = false; pushRemote(); }
+  }
+
+  async function connectRemote() {
+    const c = window.claude;
+    if (!c || typeof c.use !== 'function') return;
+    try {
+      const [db, user] = await Promise.all([c.use('db'), c.use('user')]);
+      if (!db || !user) return;
+      const uid = await user.id();
+      if (!uid) return;
+      const ref = db.doc('data/users/' + uid + '/routine');
+      const snap = await ref.get();
+      const theirs = snap.exists ? sanitize(snap.data()) : null;
+      remote = ref;
+      if (theirs && theirs.started && theirs.updatedAt > data.updatedAt) { data = theirs; saveLocal(); render(); }
+      else if (data.started && (!theirs || data.updatedAt > theirs.updatedAt)) pushRemote();
+      renderSettingsStorage();
+    } catch (e) { remote = null; }
+  }
+
+  function commit(msg) {
+    data.started = true;
+    data.updatedAt = Date.now();
+    saveLocal();
+    pushRemote();
+    render();
+    if (msg) toast(msg);
+  }
+
+  // ---------- 계산 ----------
+  function model(until, minSlots = 0) {
+    const cfg = data.cfg;
+    const sessions = L.replay(cfg, data.logs);
+    const tl = L.timeline(cfg, data.logs, today, { until, minSlots });
+    const first = sessions[0].no;
+    const cur = sessions[sessions.length - 1];
+    const maxNo = L.slotNo(cfg, Math.max(0, tl.slotDate.length - 1));
+    const all = sessions.concat(L.future(cfg, sessions, Math.max(1, maxNo - cur.no + 1)));
+    // 칸 번호(slot) = 시작 지점의 k + 기록 순서. 기록은 data.logs[slot - k0]
+    return { cfg, sessions, tl, k0: tl.k0, first, cur, sess: (no) => all[no - first], log: (slot) => data.logs[slot - tl.k0] };
+  }
+
+  const md = (n) => { const s = L.toStr(n); return +s.slice(5, 7) + '.' + +s.slice(8, 10); };
+  const longDate = (n) => { const s = L.toStr(n); return `${+s.slice(5, 7)}월 ${+s.slice(8, 10)}일 (${DOW[L.weekday(n)]})`; };
+  const stageText = (main) => (main.stage >= 1 ? `묶음 ${main.bundle} · ${main.stage}단계` : `묶음 ${main.bundle} · 회복`);
+  function wHtml(row) {
+    const s = L.fmtW(row);
+    return s.endsWith('kg') ? `${esc(s.slice(0, -2))}<span class="unit">kg</span>` : esc(s);
+  }
+  // 바벨·기구 종목의 원판 안내 (5kg 단위 + 경량원판). 덤벨이나 무게 생략 종목은 null.
+  function plates(row) {
+    if (row.skip || row.w == null) return null;
+    const sol = L.plateMath(L.roundW(row.w), data.cfg.plates, row.equip);
+    return sol ? { sol, text: L.plateText(sol), label: row.equip === 'machine' ? '추' : '원판' } : null;
+  }
+  const BALANCE_NOTE = '<strong>좌우 균형:</strong> 원판을 더 끼운 쪽은 끝까지 밀어 넣고 바깥으로 움직이지 않게 마구리로 고정하세요. 반대쪽은 원판을 조금 바깥쪽에 둔 채 마구리를 끼우세요.';
+  function flags(row) {
+    let f = '';
+    if (row.retry) f += '<span class="flag retry">재도전</span>';
+    if (row.hold) f += '<span class="flag hold">유지</span>';
+    return f;
+  }
+
+  // ---------- 그리기 ----------
+  function render() {
+    const m = model(weekMon + 6);
+    renderHeader(m);
+    if (tab === 'week') renderWeek(m);
+    if (tab === 'plan') renderPlan();
+    if (tab === 'settings' && !$('view-settings').childElementCount) renderSettings();
+    $('welcome').hidden = data.started || tab !== 'week';
+    if (sheet) renderSheet(m);
+  }
+
+  function renderHeader(m) {
+    const cur = m.cur;
+    const k = cur.first + cur.logs.length;
+    $('status').innerHTML = `<strong>세션 ${cur.no}</strong> · ${k}/6 완료<br>${esc(stageText(cur.presc.main))}`;
+    const showWeek = tab === 'week';
+    document.querySelector('.weeknav').hidden = !showWeek;
+    $('strip').hidden = !showWeek;
+    if (!showWeek) return;
+    $('range').textContent = `${md(weekMon)} – ${md(weekMon + 6)}`;
+    $('thisWeek').disabled = weekMon === L.mondayOf(m.tl.today);
+    let html = '';
+    for (let i = 0; i < 7; i++) {
+      const d = weekMon + i;
+      const e = m.tl.days.get(d);
+      let cls = '';
+      if (e && (e.kind === 'plan' || e.kind === 'log')) {
+        cls = L.slotType(e.slot);
+        if (e.kind === 'log') cls += Object.values(m.log(e.slot).res).includes(false) ? ' fail' : ' done';
+      } else if (e && e.kind === 'gap') cls = 'rest';
+      else if (e && e.kind === 'miss') cls = 'miss';
+      html += `<button type="button" role="listitem" data-act="jump" data-day="${d}" class="${d === m.tl.today ? 'is-today' : ''}">
+        <span class="dow">${DOW[L.weekday(d)]}</span><span class="dnum">${+L.toStr(d).slice(8, 10)}</span><span class="mark ${cls}"></span></button>`;
+    }
+    $('strip').innerHTML = html;
+  }
+
+  function exTable(rows, res) {
+    const live = rows.filter((r) => !r.skip);
+    const skipped = rows.filter((r) => r.skip);
+    let h = `<table class="ex"><thead><tr><th>종목</th><th class="c-w">무게</th><th class="c-r">회×세트</th><th class="c-t">휴식</th>${res ? '<th class="c-s"><span hidden>결과</span></th>' : ''}</tr></thead><tbody>`;
+    let unbalanced = false;
+    for (const r of live) {
+      const mark = res ? (res[r.id] === false ? '<span class="bad-t" aria-label="실패">✗</span>' : '<span class="ok-t" aria-label="성공">✓</span>') : '';
+      const pl = plates(r);
+      if (pl && pl.sol.unbalanced) unbalanced = true;
+      h += `<tr class="${r.main ? 'main' : ''}${pl ? ' with-plate' : ''}"><td><div class="nm">${esc(r.name)}${flags(r)}</div><div class="pt">${esc(r.main ? '하체 메인' : r.part)}</div></td>
+        <td class="c-w">${wHtml(r)}</td><td class="c-r">${r.reps}×${r.sets}</td><td class="c-t">${esc(r.rest)}</td>${res ? `<td class="c-s">${mark}</td>` : ''}</tr>`;
+      if (pl) h += `<tr class="plate"><td colspan="${res ? 5 : 4}"><span class="pl">${pl.label}</span>${esc(pl.text)}</td></tr>`;
+    }
+    h += '</tbody></table>';
+    if (unbalanced) h += `<div class="skipnote balance">${BALANCE_NOTE}</div>`;
+    if (skipped.length) h += `<div class="skipnote">하체 4단계(가장 무거운 세션)라 상체·팔은 쉬어요: ${skipped.map((r) => esc(r.name)).join(', ')}</div>`;
+    return h;
+  }
+
+  function renderWeek(m) {
+    let html = '';
+    for (let i = 0; i < 7; i++) {
+      const d = weekMon + i;
+      const e = m.tl.days.get(d);
+      const isToday = d === m.tl.today;
+      const date = `<div class="daydate"><span class="dow">${DOW[L.weekday(d)]}</span><span class="md num">${md(d)}</span></div>`;
+      const todayTag = isToday ? '<span class="tag today">오늘</span>' : '';
+      if (!e) {
+        // 아직 기록이 없을 때 시작일 이전의 지난 날: 이미 하던 루틴이면 이 날을 시작 지점으로 옮겨 이어서 기록한다.
+        const past = d < m.tl.start && d <= m.tl.today && !data.logs.length;
+        html += `<section class="day quiet${isToday ? ' is-today' : ''}" id="d${d}"><div class="dayhead">${date}<div class="dayinfo">${todayTag ? `<div class="tagline">${todayTag}</div>` : ''}<div class="meta">${d < m.tl.start ? '프로그램 시작 전' : ''}${past ? ' · 이미 하던 루틴이면 이 날부터 이어서 기록할 수 있어요' : ''}</div></div></div>
+          ${past ? `<div class="dayfoot"><button class="btn ghost" type="button" data-act="startAt" data-day="${d}">이 날 운동했어요 · 이어서 시작</button></div>` : ''}</section>`;
+        continue;
+      }
+      if (e.kind === 'gap') {
+        const can = L.canLog(m.tl, d);
+        html += `<section class="day quiet${isToday ? ' is-today' : ''}" id="d${d}"><div class="dayhead">${date}<div class="dayinfo"><div class="tagline">${todayTag}<span class="tag rest">휴식</span></div><div class="meta">세션 6번째 운동을 마친 다음 날이라 쉬어요</div></div></div>
+          ${can ? `<div class="dayfoot"><button class="btn ghost" type="button" data-act="log" data-day="${d}">이 날도 운동했다면 · 기록하기</button></div>` : ''}</section>`;
+        continue;
+      }
+      if (e.kind === 'miss') {
+        const can = L.canLog(m.tl, d);
+        html += `<section class="day quiet" id="d${d}"><div class="dayhead">${date}<div class="dayinfo"><div class="tagline"><span class="tag line">기록 없음</span></div><div class="meta">쉰 날로 보고 이날 운동을 다음 날로 미뤘어요</div></div></div>
+          ${can ? `<div class="dayfoot"><button class="btn ghost" type="button" data-act="log" data-day="${d}">이 날 운동했어요 · 기록하기</button></div>` : ''}</section>`;
+        continue;
+      }
+      const slot = e.slot;
+      const type = L.slotType(slot);
+      const no = L.slotNo(m.cfg, slot);
+      const s = m.sess(no);
+      const rows = L.dayRows(m.cfg, s.presc, type);
+      const isLog = e.kind === 'log';
+      const res = isLog ? m.log(slot).res : null;
+      const failed = isLog && Object.values(res).includes(false);
+      const projected = no > m.cur.no;
+      let tags = todayTag + `<span class="tag ${type}">${TYPE_NAME[type]}</span>`;
+      if (isLog) tags += failed ? '<span class="tag bad">일부 실패</span>' : '<span class="tag ok">완료</span>';
+      if (projected) tags += '<span class="tag line">예상</span>';
+      const meta = `세션 ${no} · ${L.slotPos(slot) + 1}/6 · ${stageText(s.presc.main)}`;
+      let foot = '';
+      if (isLog) foot = `<button class="btn ghost" type="button" data-act="edit" data-day="${d}">결과 고치기</button>`;
+      else if (L.canLog(m.tl, d)) foot = `<button class="btn" type="button" data-act="log" data-day="${d}">운동 기록하기</button><span class="hint">끝나면 종목별 성공·실패를 체크해요</span>`;
+      html += `<section class="day${isToday ? ' is-today' : ''}" id="d${d}"><div class="dayhead">${date}<div class="dayinfo"><div class="tagline">${tags}</div><div class="meta">${esc(meta)}</div></div></div>
+        <div class="daybody">${exTable(rows, res)}</div>${foot ? `<div class="dayfoot">${foot}</div>` : ''}</section>`;
+    }
+    $('days').innerHTML = html;
+  }
+
+  function renderPlan() {
+    const base = model(L.mondayOf(L.toNum(today)) + 6);
+    const count = base.cur.no - base.first + 1 + 8;
+    const m = model(L.toNum(today), count * L.SLOTS);
+    const cfg = m.cfg;
+    let h = '<thead><tr><th>세션</th><th>하체 단계</th><th>데드리프트</th><th>스쿼트</th>';
+    for (const a of cfg.acc) h += `<th class="wrap-h">${esc(a.name)}${a.sw ? ` → ${esc(a.sw.name)}` : ''}<br><span class="sdate">${a.day === 'D' ? '데드 날' : '스쿼트 날'}</span></th>`;
+    h += '</tr></thead><tbody>';
+    const mark = (v) => (v === true ? '<span class="res ok-t">✓</span>' : v === false ? '<span class="res bad-t">✗</span>' : '');
+    for (let no = m.first; no < m.first + count; no++) {
+      const s = m.sess(no);
+      const p = s.presc;
+      const out = s.out || null;
+      const isCur = no === m.cur.no;
+      const g0 = (no - m.first) * L.SLOTS;
+      const ds = m.tl.slotDate.slice(g0, g0 + L.SLOTS).filter((d) => d != null);
+      const dates = ds.length ? `${md(ds[0])}–${ds.length > 1 ? md(ds[ds.length - 1]) : ''}` : '';
+      const cls = [isCur ? 'cur' : no > m.cur.no ? 'proj' : '', p.main.stage === 1 && no > m.first ? 'bundle-start' : ''].join(' ');
+      h += `<tr class="${cls}"><td><div class="sno">${no}</div><div class="sdate">${isCur ? `진행 중 ${s.first + s.logs.length}/6` : dates}</div></td>`;
+      h += `<td class="stage">${esc(stageText(p.main))}${p.main.retry ? '<br>재도전' : ''}</td>`;
+      h += `<td><span class="w">${L.roundW(p.main.dl)}</span>${mark(out && out.main)}</td>`;
+      h += `<td><span class="w">${L.roundW(p.main.sq)}</span>${mark(out && out.main)}</td>`;
+      for (const a of cfg.acc) {
+        const q = p.acc[a.id];
+        if (q.off) { h += '<td></td>'; continue; }
+        if (q.skip) { h += '<td class="rest">휴식</td>'; continue; }
+        const w = L.fmtW({ w: q.w, n: q.n, inc: q.inc, incV: q.incV }).replace('kg', '');
+        const switched = a.sw && q.phase ? `<span class="rp"> ${esc(a.sw.name)}</span>` : '';
+        h += `<td><span class="w">${esc(w)}</span> <span class="rp">×${q.reps}</span>${mark(out && out.acc[a.id])}${switched}</td>`;
+      }
+      h += '</tr>';
+    }
+    $('planTable').innerHTML = h + '</tbody>';
+  }
+
+  // ---------- 기록 시트 ----------
+  function openSheet(mode, day) {
+    const li = mode === 'new' ? data.logs.length : data.logs.findIndex((l) => L.toNum(l.d) === day);
+    if (li < 0) return;
+    const res = mode === 'edit' ? Object.assign({}, data.logs[li].res) : {};
+    sheet = { kind: 'log', mode, day, li, slot: L.startPoint(data.cfg).k + li, res, confirmDel: false, opener: document.activeElement };
+    $('sheet').hidden = false;
+    renderSheet(model(weekMon + 6));
+    const first = $('panel').querySelector('button');
+    if (first) first.focus();
+  }
+  function closeSheet() {
+    const back = sheet && sheet.opener;
+    sheet = null;
+    $('sheet').hidden = true;
+    $('panel').innerHTML = '';
+    if (back && document.contains(back)) back.focus();
+  }
+  function sheetRows(m) {
+    const type = L.slotType(sheet.slot);
+    const no = L.slotNo(m.cfg, sheet.slot);
+    return { type, no, s: m.sess(no), rows: L.dayRows(m.cfg, m.sess(no).presc, type).filter((r) => !r.skip) };
+  }
+  function renderSheet(m) {
+    if (sheet.kind === 'start') { renderStart(); return; }
+    const { type, no, s, rows } = sheetRows(m);
+    const allSet = rows.every((r) => r.id in sheet.res);
+    const isLast = sheet.mode === 'edit' && sheet.li === data.logs.length - 1;
+    let h = `<div><h2 id="sheetTitle">${longDate(sheet.day)} · ${TYPE_NAME[type]}</h2>
+      <div class="sub">세션 ${no} · ${L.slotPos(sheet.slot) + 1}/6 · ${esc(stageText(s.presc.main))}</div></div>
+      <p class="small">목표 횟수×세트를 모두 채웠으면 성공, 한 세트라도 못 채웠으면 실패예요. 실패한 종목은 다음 세션에 한 단계 낮춰서 다시 해요.</p>
+      <div class="lrows">`;
+    for (const r of rows) {
+      const v = sheet.res[r.id];
+      const pl = plates(r);
+      h += `<div class="lrow"><div><div class="nm">${esc(r.name)}${flags(r)}</div><div class="rx"><b>${wHtml(r)}</b> · ${r.reps}회 × ${r.sets}세트</div>
+        ${pl ? `<div class="rx pl-line"><span class="pl">${pl.label}</span>${esc(pl.text)}</div>` : ''}${pl && pl.sol.unbalanced ? `<div class="rx bal">${BALANCE_NOTE}</div>` : ''}</div>
+        <div class="seg" role="group" aria-label="${esc(r.name)} 결과">
+          <button type="button" class="y" data-act="res" data-id="${esc(r.id)}" data-v="1" aria-pressed="${v === true}">성공</button>
+          <button type="button" class="n" data-act="res" data-id="${esc(r.id)}" data-v="0" aria-pressed="${v === false}">실패</button>
+        </div></div>`;
+    }
+    h += `</div><div class="btnrow"><button class="btn ghost" type="button" data-act="allok">모두 성공</button></div>
+      <button class="btn block" type="button" data-act="saveLog" ${allSet ? '' : 'disabled'}>${sheet.mode === 'new' ? '기록 저장' : '고친 결과 저장'}</button>`;
+    if (isLast) {
+      h += sheet.confirmDel
+        ? `<div class="confirm"><span>이 날 기록을 지울까요? 계획이 다시 계산돼요.</span><button class="btn danger" type="button" data-act="delLog">지우기</button><button class="btn ghost" type="button" data-act="keepLog">취소</button></div>`
+        : '<button class="btn danger" type="button" data-act="askDel">이 날 기록 지우기</button>';
+    }
+    h += '<button class="btn ghost" type="button" data-act="close">닫기</button>';
+    $('panel').innerHTML = h;
+  }
+  function saveLog() {
+    const m = model(weekMon + 6);
+    const { rows } = sheetRows(m);
+    const res = {};
+    for (const r of rows) res[r.id] = sheet.res[r.id] !== false;
+    if (sheet.mode === 'new') {
+      data.logs.push({ d: L.toStr(sheet.day), res });
+      const pos = L.slotPos(sheet.slot);
+      let msg = `${pos + 1}/6 기록했어요`;
+      if (pos === L.SLOTS - 1) {
+        const after = L.replay(data.cfg, data.logs);
+        const done = after[after.length - 2], next = after[after.length - 1];
+        msg = `세션 ${done.no} 완료${done.out.main ? '' : '(하체 실패)'} · 다음 세션 데드리프트 ${L.roundW(next.presc.main.dl)}kg`;
+      }
+      closeSheet(); commit(msg);
+    } else {
+      data.logs[sheet.li].res = res;
+      closeSheet(); commit('결과를 고쳤어요. 이후 계획을 다시 계산했어요');
+    }
+  }
+
+  // ---------- 이어서 시작 (시작 지점) ----------
+  // 이미 하던 루틴을 이어서 기록할 때: 그 날 운동이 몇 세션의 몇 번째였는지, 그때 하체 단계·무게·횟수를 정한다.
+  const stageName = (s) => ['1단계 · 묶음 시작', '2단계', '3단계', '4단계 · 가장 무거운 날'][s - 1];
+  function openStart(day) {
+    const cfg = data.cfg;
+    const sp = L.startPoint(cfg);
+    const st = L.initState(cfg);
+    const T = L.toNum(today);
+    // 기록이 있으면 첫 기록 날이 시작 지점이다 (그 기록이 새 세션·순서로 다시 계산된다).
+    if (data.logs.length) day = L.toNum(data.logs[0].d);
+    else if (day == null) day = L.toNum(cfg.startDate) < T ? L.toNum(cfg.startDate) : T - 1;
+    const acc = {};
+    for (const a of cfg.acc) { const s = st.acc[a.id]; acc[a.id] = { w: a.w, step: s.step, done: s.done, phase: s.phase, n: s.n }; }
+    sheet = { kind: 'start', day, no: sp.no, k: sp.k, stage: sp.stage, dl: cfg.main.dl, acc, note: '', err: '', opener: document.activeElement };
+    $('sheet').hidden = false;
+    renderStart();
+    const first = $('panel').querySelector('input:not([disabled]), select');
+    if (first) first.focus();
+  }
+  // 세션 번호를 바꾸면 지금 시작 지점에서 모두 성공했다고 보고 그 세션의 단계·무게·횟수를 채운다.
+  function refillStart() {
+    const cfg = data.cfg;
+    const p = L.projectTo(cfg, sheet.no);
+    if (!p) {
+      sheet.stage = ((sheet.no - 1) % L.MAIN_STAGES) + 1;
+      stageDefaults();
+      sheet.note = `지금 시작 지점(세션 ${L.startPoint(cfg).no})보다 앞 세션이라 무게는 채우지 못했어요. 그 세션의 무게로 고쳐 주세요.`;
+      return;
+    }
+    sheet.stage = p.presc.main.stage;
+    sheet.dl = L.roundW(p.presc.main.dl);
+    for (const a of cfg.acc) {
+      const s = p.state.acc[a.id];
+      sheet.acc[a.id] = { w: s.w == null ? null : L.roundW(s.w), step: s.step, done: s.done, phase: s.phase, n: s.n };
+    }
+    sheet.note = `세션 ${L.startPoint(cfg).no}부터 모두 성공했다고 보고 채웠어요. 실제와 다르면 고쳐 주세요.`;
+  }
+  // 하체 단계를 직접 바꾸면 상체·팔 횟수도 그 단계에 맞춘다.
+  function stageDefaults() {
+    for (const a of data.cfg.acc) Object.assign(sheet.acc[a.id], L.accAt((a.from || 1) > sheet.no ? 1 : sheet.stage));
+  }
+  function stepOptions(a, o) {
+    const reps = (step) => L.ladderReps(a, { w: o.w, step });
+    const cur = o.done ? 'h' : String(o.step);
+    const opts = [];
+    for (let step = Math.min(-2, o.step); step <= L.ACC_TOP; step++) {
+      if (step < 0 && reps(step) >= reps(step + 1)) continue;
+      opts.push([String(step), `${reps(step)}회 · ${step < 0 ? '낮춘 단계' : `${step + 1}단계`}`]);
+    }
+    opts.push(['h', `${reps(L.ACC_TOP)}회 유지 · 증량 대기`]);
+    return opts.map(([v, t]) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${t}</option>`).join('');
+  }
+  function renderStart() {
+    const cfg = data.cfg;
+    const d = sheet;
+    const T = L.toNum(today);
+    const n = data.logs.length;
+    let h = `<div><h2 id="sheetTitle">이어서 시작하기</h2><div class="sub">이미 하던 루틴을 이 날부터 이어서 기록해요</div></div>
+      <p class="small">기록을 시작할 날의 운동이 몇 세션의 몇 번째였는지와 그때 무게를 넣어 주세요. 세션 번호를 바꾸면 지금 설정에서 모두 성공했다고 보고 무게·횟수를 채워요.</p>
+      ${n ? `<p class="small note">이미 기록한 ${n}일은 그대로 두고, 첫 기록(${longDate(d.day)})이 여기서 고른 운동이 되도록 다시 계산해요. 그보다 앞 날짜부터 넣으려면 기록을 지운 뒤 가장 이른 날부터 다시 넣어 주세요.</p>` : ''}
+      <div class="row2"><label class="field"><span>${n ? '날짜 (첫 기록)' : '날짜'}</span><input type="date" id="st-day" data-sk="day" value="${L.toStr(d.day)}" max="${L.toStr(T)}" ${n ? 'disabled' : ''}></label>
+      <label class="field"><span>세션 번호</span><input type="number" inputmode="numeric" min="1" step="1" id="st-no" data-sk="no" value="${d.no}"></label></div>
+      <div class="row2"><label class="field"><span>이 날 운동</span><select id="st-k" data-sk="k">${[0, 1, 2, 3, 4, 5].map((k) => `<option value="${k}" ${k === d.k ? 'selected' : ''}>${k + 1}번째 · ${TYPE_NAME[L.slotType(k)]}</option>`).join('')}</select></label>
+      <label class="field"><span>하체 단계</span><select id="st-stage" data-sk="stage">${[1, 2, 3, 4].map((s) => `<option value="${s}" ${s === d.stage ? 'selected' : ''}>${stageName(s)}</option>`).join('')}</select></label></div>
+      ${d.note ? `<p class="small note">${esc(d.note)}</p>` : ''}
+      <div class="row2"><label class="field"><span>데드리프트 (kg)</span><input type="number" inputmode="decimal" step="0.1" min="1" id="st-dl" data-sk="dl" value="${d.dl}"></label>
+      <div class="field"><span>스쿼트</span><div class="derived" id="st-sq"></div></div></div>
+      <div class="stacc"><div class="sthead">상체·팔 <span>· 이 세션의 무게와 횟수</span></div>`;
+    for (const a of cfg.acc) {
+      const o = d.acc[a.id];
+      const off = (a.from || 1) > d.no;
+      const name = a.sw && o.phase ? a.sw.name : a.name;
+      h += `<div class="strow"><div class="stname"><span class="tag ${a.day}">${a.day === 'D' ? '데드 날' : '스쿼트 날'}</span><b>${esc(name)}</b>${off ? `<span class="small">세션 ${a.from}부터</span>` : ''}</div>
+        <div class="row2">${o.w == null ? '<div class="field"><span>무게</span><div class="derived">생략</div></div>'
+          : `<label class="field"><span>무게 (kg)</span><input type="number" inputmode="decimal" step="0.1" min="0.1" id="st-w-${esc(a.id)}" data-sk="w" data-id="${esc(a.id)}" value="${o.w}"></label>`}
+        <label class="field"><span>횟수</span><select id="st-step-${esc(a.id)}" data-sk="step" data-id="${esc(a.id)}">${stepOptions(a, o)}</select></label></div>
+        ${a.sw ? `<label class="field"><span>종목</span><select id="st-phase-${esc(a.id)}" data-sk="phase" data-id="${esc(a.id)}"><option value="0" ${o.phase ? '' : 'selected'}>${esc(a.name)}</option><option value="1" ${o.phase ? 'selected' : ''}>${esc(a.sw.name)}</option></select></label>` : ''}</div>`;
+    }
+    h += '</div>';
+    if (d.stage === L.MAIN_STAGES) h += '<p class="small">하체 4단계 세션이라 이 세션의 상체·팔은 쉬어요. 횟수는 다음 묶음에서 이어갈 단계로 골라 주세요.</p>';
+    if (d.err) h += `<p class="small err" role="alert">${esc(d.err)}</p>`;
+    h += `<button class="btn block" type="button" data-act="saveStart">이 지점부터 이어가기</button>
+      <button class="btn ghost" type="button" data-act="close">닫기</button>`;
+    const panel = $('panel');
+    const top = panel.scrollTop;
+    const focusId = document.activeElement && panel.contains(document.activeElement) ? document.activeElement.id : '';
+    panel.innerHTML = h;
+    panel.scrollTop = top;
+    if (focusId && $(focusId)) $(focusId).focus();
+    startSquat();
+  }
+  function startSquat() {
+    const el = $('st-sq');
+    if (el) el.innerHTML = sheet.dl > 0 ? `<b>${L.roundW(sheet.dl / data.cfg.main.ratio)}kg</b> (÷ ${data.cfg.main.ratio})` : '—';
+  }
+  // 이어서 시작 시트의 입력: 숫자는 입력하는 대로 반영하고, 구조가 바뀌는 값(세션·단계·종목)은 다시 그린다.
+  function startInput(el, done) {
+    const d = sheet;
+    const f = el.dataset.sk;
+    const o = el.dataset.id ? d.acc[el.dataset.id] : null;
+    const a = el.dataset.id ? data.cfg.acc.find((x) => x.id === el.dataset.id) : null;
+    d.err = '';
+    if (f === 'dl') { d.dl = Number(el.value); startSquat(); return; }
+    if (f === 'w' && o) {
+      o.w = Number(el.value);
+      if (done && a && a.light) { const sel = $('st-step-' + a.id); if (sel) sel.innerHTML = stepOptions(a, o); }
+      return;
+    }
+    if (!done) return;
+    if (f === 'day') { if (el.value) d.day = L.toNum(el.value); return; }
+    if (f === 'no') {
+      const v = Math.floor(Number(el.value));
+      if (!(v >= 1)) { el.value = d.no; toast('세션 번호는 1 이상이에요'); return; }
+      d.no = v; refillStart();
+    } else if (f === 'k') d.k = Number(el.value);
+    else if (f === 'stage') { d.stage = Number(el.value); stageDefaults(); d.note = ''; }
+    else if (f === 'step' && o) { if (el.value === 'h') { o.step = L.ACC_TOP; o.done = true; } else { o.step = Number(el.value); o.done = false; } return; }
+    else if (f === 'phase' && o && a && a.sw) { o.phase = el.value === '1' ? 1 : 0; if (o.phase && o.w != null) o.w = a.sw.w; }
+    renderStart();
+  }
+  function saveStart() {
+    const cfg = data.cfg;
+    const d = sheet;
+    const T = L.toNum(today);
+    const fail = (msg) => { d.err = msg; renderStart(); const e = $('panel').querySelector('.err'); if (e) e.scrollIntoView({ block: 'nearest' }); };
+    if (!(d.day <= T)) return fail('오늘이나 지난 날짜를 골라 주세요.');
+    if (data.logs.length) {
+      d.day = L.toNum(data.logs[0].d);
+      if (d.k % 2 !== L.startPoint(cfg).k % 2) return fail(`이미 기록한 운동과 데드리프트·스쿼트 순서가 어긋나요. 이 날 운동을 ${TYPE_NAME[L.slotType(L.startPoint(cfg).k)]} 날(${L.startPoint(cfg).k % 2 ? '2·4·6' : '1·3·5'}번째)로 골라 주세요.`);
+    }
+    if (!(d.dl > 0)) return fail('데드리프트 무게를 넣어 주세요.');
+    for (const a of cfg.acc) { const w = d.acc[a.id].w; if (w != null && !(w > 0)) return fail(`${a.name} 무게를 확인해 주세요.`); }
+    cfg.startDate = L.toStr(d.day);
+    cfg.main.dl = L.roundW(d.dl);
+    const acc = {};
+    for (const a of cfg.acc) {
+      const o = d.acc[a.id];
+      if (a.w != null && o.w != null) a.w = L.roundW(o.w);
+      acc[a.id] = { step: o.step, done: !!o.done && o.step === L.ACC_TOP, phase: a.sw && o.phase ? 1 : 0, n: o.n || 0 };
+    }
+    cfg.from = { no: d.no, k: d.k, stage: d.stage, acc };
+    const day = d.day;
+    closeSheet();
+    weekMon = L.mondayOf(day);
+    commit(`세션 ${d.no}의 ${d.k + 1}번째 운동부터 이어가요`);
+    if (tab === 'settings') renderSettings();
+    // 지난 날을 시작으로 잡았으면 그 날 한 운동 결과를 바로 체크한다.
+    if (day < T && L.canLog(model(weekMon + 6).tl, day)) openSheet('new', day);
+  }
+
+  // ---------- 설정 ----------
+  function renderSettings() {
+    const cfg = data.cfg;
+    const sp = L.startPoint(cfg);
+    const wl = sp.no > 1 ? `세션 ${sp.no} 무게` : '시작 무게';
+    const equipOpts = (v) => [['barbell', '바벨'], ['machine', '머신·케이블'], ['dumbbell', '덤벨']].map(([k, t]) => `<option value="${k}" ${v === k ? 'selected' : ''}>${t}</option>`).join('');
+    let h = `<div class="card"><h2>시작 지점</h2>
+      <p class="startsum"><b>${longDate(L.toNum(cfg.startDate))}</b> · 세션 ${sp.no}의 ${sp.k + 1}번째 운동(${TYPE_NAME[L.slotType(sp.k)]}) · 하체 ${sp.stage}단계</p>
+      <p class="small">이미 하던 루틴이 있으면 시작 지점을 그 세션으로 옮기세요. 그 날부터 오늘까지 한 운동은 이번 주 화면에서 지난 날을 눌러 날짜순으로 기록하면 돼요. 아래 무게는 시작 지점 세션의 무게예요.</p>
+      <div class="btnrow"><button class="btn ghost" type="button" data-act="startSheet">시작 지점 바꾸기 · 이어서 시작</button></div>
+      <p class="small">쉬는 요일은 따로 없어요. 세션의 6번째 운동을 마친 다음 날 하루 쉬고, 기록하지 않은 날은 쉰 날로 봐요. 무게·횟수를 바꾸면 지난 기록까지 포함해 전체 계획을 다시 계산해요.</p></div>`;
+
+    h += `<div class="card"><h2>가지고 있는 경량원판</h2>
+      <p class="small">종류마다 한 쌍(2장)이 있다고 보고 계산해요. 2.5kg 원판은 헬스장에 있다고 보고, 필요하면 한 짝만 쓰게 안내해요.</p>
+      <div class="plates">${L.PLATE_OPTIONS.map((p) => `<label><input type="checkbox" id="set-plate-${String(p).replace('.', '_')}" data-k="plate" value="${p}" ${cfg.plates.includes(p) ? 'checked' : ''}><span>${p}kg</span></label>`).join('')}</div>
+      <p class="small">바벨·머신 종목에는 5kg 단위 무게와 나머지를 채울 경량원판을 함께 보여줘요. 목표 무게 이상이 되는 가장 가벼운 조합을 고르고, 바벨은 그다음으로 좌우가 고른 조합을 골라요.</p></div>`;
+
+    h += `<div class="card"><h2>하체 메인 · 데드리프트와 스쿼트</h2>
+      <div class="row2"><label class="field"><span>데드리프트 ${wl} (kg)</span><input type="number" inputmode="decimal" step="0.1" min="1" id="set-dl" data-k="main.dl" value="${cfg.main.dl}"></label>
+      <div class="field"><span>스쿼트 ${wl}</span><div class="derived" id="sqDerived"></div></div></div>
+      <div class="row3"><label class="field"><span>횟수</span><input type="number" inputmode="numeric" min="1" id="set-mreps" data-k="main.reps" value="${cfg.main.reps}"></label>
+      <label class="field"><span>세트</span><input type="number" inputmode="numeric" min="1" id="set-msets" data-k="main.sets" value="${cfg.main.sets}"></label>
+      <label class="field"><span>휴식</span><input type="text" id="set-mrest" data-k="main.rest" value="${esc(cfg.main.rest)}"></label></div></div>`;
+
+    h += '<div class="card"><h2>상체·팔 보조 운동</h2><p class="small">무게를 비워 두면 "무게 생략"으로 두고 증량분만 +1kg처럼 표시해요.</p>';
+    cfg.acc.forEach((a, i) => {
+      const del = pendingDel === a.id;
+      h += `<div class="acc"><div class="acc-head"><span class="tag ${a.day}">${a.day === 'D' ? '데드 날' : '스쿼트 날'}</span>
+        <input type="text" id="acc-${esc(a.id)}-name" data-k="acc.${i}.name" value="${esc(a.name)}" aria-label="종목 이름">
+        <button class="btn ${del ? 'danger' : 'ghost'}" type="button" data-act="delAcc" data-id="${esc(a.id)}">${del ? '한 번 더 누르면 삭제' : '삭제'}</button></div>
+        <div class="row3"><label class="field"><span>부위</span><input type="text" id="acc-${esc(a.id)}-part" data-k="acc.${i}.part" value="${esc(a.part)}"></label>
+        <label class="field"><span>${wl} (kg)</span><input type="number" inputmode="decimal" step="0.1" min="0" id="acc-${esc(a.id)}-w" data-k="acc.${i}.w" value="${a.w == null ? '' : a.w}" placeholder="생략"></label>
+        <label class="field"><span>1단계 횟수</span><input type="number" inputmode="numeric" min="1" id="acc-${esc(a.id)}-reps" data-k="acc.${i}.reps" value="${a.reps}"></label></div>
+        <div class="row2"><div class="row2"><label class="field"><span>세트</span><input type="number" inputmode="numeric" min="1" id="acc-${esc(a.id)}-sets" data-k="acc.${i}.sets" value="${a.sets}"></label>
+        <label class="field"><span>휴식</span><input type="text" id="acc-${esc(a.id)}-rest" data-k="acc.${i}.rest" value="${esc(a.rest)}"></label></div>
+        <div class="row2"><label class="field"><span>증량 방식</span><select id="acc-${esc(a.id)}-inc" data-k="acc.${i}.inc"><option value="pct" ${a.inc === 'pct' ? 'selected' : ''}>%</option><option value="kg" ${a.inc === 'kg' ? 'selected' : ''}>kg</option></select></label>
+        <label class="field"><span>증량 값</span><input type="number" inputmode="decimal" step="0.5" min="0" id="acc-${esc(a.id)}-incv" data-k="acc.${i}.incV" value="${a.incV}"></label></div></div>
+        <label class="field"><span>기구</span><select id="acc-${esc(a.id)}-equip" data-k="acc.${i}.equip">${equipOpts(a.equip)}</select></label>
+        <label class="check"><input type="checkbox" id="acc-${esc(a.id)}-light" data-k="acc.${i}.light" ${a.light ? 'checked' : ''}><span>저중량 규칙 — 20kg 미만일 때 5·7·9회로 가고 묶음 성공 시 +5kg. 20kg부터는 위 횟수·증량으로 돌아가요.</span></label>
+        <label class="check"><input type="checkbox" id="acc-${esc(a.id)}-sw" data-k="acc.${i}.sw" ${a.sw ? 'checked' : ''}><span>무게가 오르면 바벨 종목으로 바꾸기</span></label>
+        ${a.sw && (sp.acc[a.id] || {}).phase ? `<p class="small">시작 지점 세션에서 이미 ${esc(a.sw.name)}(으)로 바꾼 상태라, 위 무게는 ${esc(a.sw.name)} 무게예요.</p>` : ''}
+        ${a.sw ? `<div class="swbox"><div class="row2"><label class="field"><span>바꾸는 시점 (이 무게가 될 차례에)</span><input type="number" inputmode="decimal" step="0.5" min="0.5" id="acc-${esc(a.id)}-swat" data-k="acc.${i}.sw.at" value="${a.sw.at}"></label>
+          <label class="field"><span>바꿀 종목</span><input type="text" id="acc-${esc(a.id)}-swname" data-k="acc.${i}.sw.name" value="${esc(a.sw.name)}"></label></div>
+          <div class="row3"><label class="field"><span>시작 무게 (kg)</span><input type="number" inputmode="decimal" step="0.5" min="0.5" id="acc-${esc(a.id)}-sww" data-k="acc.${i}.sw.w" value="${a.sw.w}"></label>
+          <label class="field"><span>증량 방식</span><select id="acc-${esc(a.id)}-swinc" data-k="acc.${i}.sw.inc"><option value="pct" ${a.sw.inc === 'pct' ? 'selected' : ''}>%</option><option value="kg" ${a.sw.inc === 'kg' ? 'selected' : ''}>kg</option></select></label>
+          <label class="field"><span>증량 값</span><input type="number" inputmode="decimal" step="0.5" min="0" id="acc-${esc(a.id)}-swincv" data-k="acc.${i}.sw.incV" value="${a.sw.incV}"></label></div></div>` : ''}</div>`;
+    });
+    h += `<div class="btnrow"><button class="btn ghost" type="button" data-act="addAcc" data-day="D">+ 데드 날 종목</button><button class="btn ghost" type="button" data-act="addAcc" data-day="S">+ 스쿼트 날 종목</button></div></div>`;
+
+    h += `<div class="card"><h2>규칙</h2><ul class="rules">
+      <li>한 세션은 운동 6회(데드리프트 날 → 스쿼트 날 번갈아 3회씩). 6번째 운동을 마친 다음 날 하루 쉬어요. 고정으로 쉬는 요일은 없어요.</li>
+      <li>기록하지 않고 지나간 날은 쉰 날로 보고, 그날 운동을 다음 날로 미뤄요. 운동하고 깜빡했다면 그날을 눌러 나중에 기록할 수 있어요.</li>
+      <li>이미 하던 루틴이면 시작 지점을 그 세션·순서·무게로 옮기고, 그 뒤 지난 날들을 날짜순으로 기록해 이어가요.</li>
+      <li>데드리프트 = 스쿼트 × 1.2. 둘은 한 묶음으로 같이 오르내려요.</li>
+      <li>하체는 세션마다 5%씩 올려 4단계까지 가고, 4단계를 성공하면 그 묶음의 2단계 무게로 내려 새 묶음을 시작해요.</li>
+      <li>하체를 하나라도 실패하면 다음 세션은 한 단계(−5%) 낮춰 다시 하고, 원래 4단계를 채울 때까지 이어가요.</li>
+      <li>상체·팔은 세션마다 1회씩 늘려 3단계(예: 3·4·5회)까지 가고, 하체 4단계 날은 쉬어요. 실패하면 한 단계(−1회) 낮춰요.</li>
+      <li>상체·팔은 3단계를 성공한 뒤 하체가 4단계를 성공하면 다음 세션부터 증량해요. 그 전까지는 마지막 횟수를 유지해요.</li>
+      <li>가슴은 덤벨프레스를 1kg씩 올리다가 10kg(양손 20kg)이 될 차례에 바벨 벤치프레스 20kg으로 바꿔 5%씩 올려요.</li>
+    </ul></div>`;
+
+    h += `<div class="card"><h2>데이터</h2><p class="small" id="storageNote"></p>
+      <div class="btnrow"><button class="btn ghost" type="button" data-act="copyBackup">백업 복사</button><button class="btn ghost" type="button" data-act="importBackup">붙여 넣은 백업 불러오기</button></div>
+      <label class="field"><span>백업 내용 (다른 기기로 옮길 때 여기에 붙여 넣기)</span><textarea id="backupBox" spellcheck="false"></textarea></label>
+      ${confirmReset
+        ? '<div class="confirm"><span>모든 기록을 지우고 오늘부터 다시 시작할까요? 설정은 그대로예요.</span><button class="btn danger" type="button" data-act="reset">지우고 다시 시작</button><button class="btn ghost" type="button" data-act="cancelReset">취소</button></div>'
+        : '<div class="btnrow"><button class="btn danger" type="button" data-act="askReset">기록 지우고 처음부터</button></div>'}
+    </div>`;
+    $('view-settings').innerHTML = h;
+    renderDerived();
+    renderSettingsStorage();
+  }
+  function renderDerived() {
+    const el = $('sqDerived');
+    if (el) el.innerHTML = `<b>${L.roundW(data.cfg.main.dl / data.cfg.main.ratio)}kg</b> (데드리프트 ÷ ${data.cfg.main.ratio})`;
+  }
+  function renderSettingsStorage() {
+    const el = $('storageNote');
+    if (!el) return;
+    el.textContent = remote
+      ? '기록은 지금 로그인한 Claude 계정에 저장돼서 다른 기기에서 열어도 이어져요. 이 기기에도 사본을 남겨요.'
+      : '기록은 이 기기의 브라우저에만 저장돼요. 브라우저 데이터를 지우면 사라지니 가끔 백업을 복사해 두세요.';
+  }
+
+  function applySetting(el) {
+    const k = el.dataset.k;
+    const cfg = data.cfg;
+    const num = (v) => (v === '' ? NaN : Number(v));
+    if (k === 'plate') {
+      const p = Number(el.value);
+      const set = new Set(cfg.plates);
+      if (el.checked) set.add(p); else set.delete(p);
+      cfg.plates = L.PLATE_OPTIONS.filter((x) => set.has(x));
+    } else if (/^acc\.\d+\.sw\./.test(k)) {
+      const [, i, , f] = k.split('.');
+      const sw = cfg.acc[+i] && cfg.acc[+i].sw;
+      if (!sw) return;
+      if (f === 'name') sw.name = el.value.trim() || sw.name;
+      else if (f === 'inc') sw.inc = el.value === 'kg' ? 'kg' : 'pct';
+      else {
+        const v = num(el.value);
+        if (!(f === 'incV' ? v >= 0 : v > 0)) { el.value = sw[f]; toast('숫자를 확인해 주세요'); return; }
+        sw[f] = v;
+      }
+    } else if (k.startsWith('main.')) {
+      const f = k.slice(5);
+      if (f === 'rest') cfg.main.rest = el.value.trim();
+      else {
+        const v = num(el.value);
+        if (!(v > 0)) { el.value = cfg.main[f]; toast('0보다 큰 숫자를 넣어 주세요'); return; }
+        cfg.main[f] = f === 'dl' ? v : Math.round(v);
+      }
+    } else if (k.startsWith('acc.')) {
+      const [, i, f] = k.split('.');
+      const a = cfg.acc[+i];
+      if (!a) return;
+      if (f === 'name') a.name = el.value.trim() || a.name;
+      else if (f === 'part' || f === 'rest') a[f] = el.value.trim();
+      else if (f === 'inc') a.inc = el.value === 'kg' ? 'kg' : 'pct';
+      else if (f === 'equip') a.equip = ['barbell', 'machine', 'dumbbell'].includes(el.value) ? el.value : 'dumbbell';
+      else if (f === 'light') a.light = el.checked;
+      else if (f === 'sw') {
+        a.sw = el.checked ? { at: a.w != null ? a.w + 3 : 10, name: '바벨 종목', w: 20, inc: 'pct', incV: 5 } : null;
+        renderDerived(); commit(); renderSettings();
+        const box = $(`acc-${a.id}-sw`);
+        if (box) box.focus();
+        return;
+      }
+      else if (f === 'w') {
+        const v = num(el.value);
+        if (el.value !== '' && !(v > 0)) { el.value = a.w == null ? '' : a.w; toast('무게는 0보다 커야 해요. 비우면 생략이에요'); return; }
+        a.w = el.value === '' ? null : v;
+      } else {
+        const v = num(el.value);
+        const ok = f === 'incV' ? v >= 0 : v >= 1;
+        if (!ok) { el.value = a[f]; toast('숫자를 확인해 주세요'); return; }
+        a[f] = f === 'incV' ? v : Math.round(v);
+      }
+    }
+    renderDerived();
+    commit();
+  }
+
+  // ---------- 알림 ----------
+  function toast(msg) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, 3200);
+  }
+
+  function setTab(next) {
+    tab = next;
+    for (const name of ['week', 'plan', 'settings']) {
+      $('view-' + name).hidden = name !== tab;
+      $('tab-' + name).setAttribute('aria-selected', String(name === tab));
+    }
+    if (tab === 'settings') { pendingDel = null; confirmReset = false; renderSettings(); }
+    render();
+    window.scrollTo(0, 0);
+  }
+
+  // ---------- 이벤트 ----------
+  document.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('[data-act]');
+    if (!b) { if (ev.target === $('sheet')) closeSheet(); return; }
+    const act = b.dataset.act;
+    const day = b.dataset.day == null ? null : Number(b.dataset.day);
+    if (act === 'tab') setTab(b.dataset.tab);
+    else if (act === 'start') commit('오늘부터 시작했어요');
+    else if (act === 'jump') { const el = $('d' + day); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    else if (act === 'log') openSheet('new', day);
+    else if (act === 'startSheet') openStart(null);
+    else if (act === 'startAt') openStart(day);
+    else if (act === 'saveStart') saveStart();
+    else if (act === 'edit') openSheet('edit', day);
+    else if (act === 'close') closeSheet();
+    else if (act === 'res') { sheet.res[b.dataset.id] = b.dataset.v === '1'; renderSheet(model(weekMon + 6)); }
+    else if (act === 'allok') { for (const r of sheetRows(model(weekMon + 6)).rows) sheet.res[r.id] = true; renderSheet(model(weekMon + 6)); }
+    else if (act === 'saveLog') saveLog();
+    else if (act === 'askDel') { sheet.confirmDel = true; renderSheet(model(weekMon + 6)); }
+    else if (act === 'keepLog') { sheet.confirmDel = false; renderSheet(model(weekMon + 6)); }
+    else if (act === 'delLog') { data.logs.pop(); closeSheet(); commit('기록을 지웠어요'); }
+    else if (act === 'addAcc') {
+      const ss = L.replay(data.cfg, data.logs);
+      const no = ss[ss.length - 1].no;
+      data.cfg.acc.push({ id: 'x' + Date.now().toString(36), name: '새 종목', part: '', day: b.dataset.day, equip: 'dumbbell', w: 5, reps: 5, sets: 3, rest: '2분', inc: 'kg', incV: 1, light: false, from: no, sw: null });
+      commit(`세션 ${no}부터 들어가요`); renderSettings();
+    } else if (act === 'delAcc') {
+      const id = b.dataset.id;
+      if (pendingDel !== id) { pendingDel = id; renderSettings(); return; }
+      data.cfg.acc = data.cfg.acc.filter((a) => a.id !== id);
+      pendingDel = null; commit('종목을 지웠어요'); renderSettings();
+    } else if (act === 'copyBackup') {
+      const text = JSON.stringify(data);
+      const box = $('backupBox');
+      try { await navigator.clipboard.writeText(text); toast('백업을 복사했어요. 메모 앱 등에 붙여 넣어 두세요'); }
+      catch (e) { box.value = text; box.focus(); box.select(); toast('아래 칸의 내용을 길게 눌러 복사하세요'); }
+    } else if (act === 'importBackup') {
+      let parsed = null;
+      try { parsed = sanitize(JSON.parse($('backupBox').value)); } catch (e) { parsed = null; }
+      if (!parsed) { toast('백업 내용을 읽지 못했어요. 복사한 글 전체를 붙여 넣어 주세요'); return; }
+      data = parsed; commit('백업을 불러왔어요'); renderSettings();
+    } else if (act === 'askReset') { confirmReset = true; renderSettings(); }
+    else if (act === 'cancelReset') { confirmReset = false; renderSettings(); }
+    else if (act === 'reset') {
+      data.logs = []; data.cfg.startDate = today; confirmReset = false;
+      weekMon = L.mondayOf(L.toNum(today));
+      commit('기록을 지우고 오늘부터 다시 시작해요'); renderSettings();
+    }
+  });
+  document.addEventListener('change', (ev) => {
+    const t = ev.target;
+    if (!t.dataset) return;
+    if (t.dataset.sk) { if (sheet && sheet.kind === 'start') startInput(t, true); }
+    else if (t.dataset.k) applySetting(t);
+  });
+  document.addEventListener('input', (ev) => { const t = ev.target; if (t.dataset && t.dataset.sk && sheet && sheet.kind === 'start') startInput(t, false); });
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && sheet) closeSheet(); });
+  $('prevWeek').addEventListener('click', () => { weekMon -= 7; render(); });
+  $('nextWeek').addEventListener('click', () => { weekMon += 7; render(); });
+  $('thisWeek').addEventListener('click', () => { weekMon = L.mondayOf(L.toNum(today)); render(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    const now = L.localToday();
+    if (now !== today) { today = now; weekMon = L.mondayOf(L.toNum(today)); render(); }
+  });
+
+  render();
+  const boot = $('boot');
+  if (boot) boot.remove();
+  window.onerror = null;
+  connectRemote();
+  if (window.ROUTINE_STANDALONE && 'serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>
