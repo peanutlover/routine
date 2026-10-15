@@ -262,8 +262,7 @@ const RoutineLogic = (() => {
   function slotPos(g) { return ((g % SLOTS) + SLOTS) % SLOTS; }
 
   // ---------- 경량원판 ----------
-  // 5kg 단위는 일반 원판으로 끼우고, 나머지를 가진 경량원판(종류별 한 쌍)과 2.5kg 원판으로 채운다.
-  // 2.5kg 한 짝은 머신(추에 올림)이나, 경량원판이 1.25kg뿐인 바벨에서만 쓴다.
+  // 5kg 단위는 일반 원판으로 끼우고, 나머지를 가진 경량원판(종류별 한 쌍)과 2.5kg 원판(한 짝도 가능)으로 채운다.
   // 고르는 순서: 목표 무게 이상이면서 가장 가벼운 조합 → (바벨) 양쪽 무게 차이가 작은 조합 → 원판 수가 적은 조합.
   const plateMemo = new Map();
   function plateMath(target, plates, equip) {
@@ -276,8 +275,6 @@ const RoutineLogic = (() => {
     let result = null;
     if (r > 0) {
       const kinds = [250].concat([...new Set((plates || []).map((p) => Math.round(p * 100)))].filter((p) => p > 0 && p < 250).sort((a, b) => b - a));
-      const own = kinds.slice(1);
-      const single25 = own.length === 1 && own[0] === 125;
       let min = Infinity;
       const combos = [];
       const walk = (i, total, pieces) => {
@@ -287,9 +284,7 @@ const RoutineLogic = (() => {
           if (total === min) combos.push(pieces.slice());
           return;
         }
-        // 2.5kg 한 짝(바벨 한쪽만)은 경량원판이 1.25kg뿐일 때만 허용. 그 밖의 바벨은 2.5kg을 한 쌍으로만 쓴다.
-        const step = kinds[i] === 250 && equip === 'barbell' && !single25 ? 2 : 1;
-        for (let c = 0; c <= 2; c += step) {
+        for (let c = 0; c <= 2; c++) {
           for (let k = 0; k < c; k++) pieces.push(kinds[i]);
           walk(i + 1, total + c * kinds[i], pieces);
           pieces.length -= c;
