@@ -1,4 +1,4 @@
-/* 5% 루틴 — 화면과 저장. 로직은 RoutineLogic(logic.js)에 있다. */
+/* 웨이트트레이닝 루틴 — 화면과 저장. 로직은 RoutineLogic(logic.js)에 있다. */
 (() => {
   'use strict';
   const L = RoutineLogic;

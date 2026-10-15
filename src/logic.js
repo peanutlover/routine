@@ -1,4 +1,4 @@
-/* 5% 루틴 — 진행 로직 (순수 함수). 브라우저(index.html)와 Node 테스트에서 함께 사용한다. */
+/* 웨이트트레이닝 루틴 — 진행 로직 (순수 함수). 브라우저(index.html)와 Node 테스트에서 함께 사용한다. */
 const RoutineLogic = (() => {
   'use strict';
 

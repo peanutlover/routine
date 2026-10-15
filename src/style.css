@@ -58,7 +58,7 @@ button { cursor: pointer; }
 }
 .top .wrap { padding-block: 12px 10px; display: grid; gap: 10px; }
 .brand { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.brand h1 { margin: 0; font: 700 26px/1 var(--f-display); letter-spacing: .02em; text-transform: uppercase; }
+.brand h1 { margin: 0; font: 700 22px/1.1 var(--f-body); letter-spacing: -.01em; }
 .brand h1 b { color: var(--dl); }
 .status { font-size: 13px; color: var(--muted); text-align: right; }
 .status strong { color: var(--ink); font-weight: 600; }
