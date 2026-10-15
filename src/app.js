@@ -522,7 +522,7 @@
       <p class="small">쉬는 요일은 따로 없어요. 세션의 6번째 운동을 마친 다음 날 하루 쉬고, 기록하지 않은 날은 쉰 날로 봐요. 무게·횟수를 바꾸면 지난 기록까지 포함해 전체 계획을 다시 계산해요.</p></div>`;
 
     h += `<div class="card"><h2>가지고 있는 경량원판</h2>
-      <p class="small">종류마다 한 쌍(2장)이 있다고 보고 계산해요. 2.5kg 원판은 헬스장에 있다고 보고, 필요하면 한 짝만 쓰게 안내해요.</p>
+      <p class="small">종류마다 한 쌍(2장)이 있다고 보고 계산해요. 2.5kg 원판은 따로 고르지 않아도 늘 함께 쓰고, 필요하면 한 짝만 끼우게 안내해요. 경량원판이 하나도 없으면 모두 끄세요. 2.5kg 한 짝·한 쌍으로만 맞춰요.</p>
       <div class="plates">${L.PLATE_OPTIONS.map((p) => `<label><input type="checkbox" id="set-plate-${String(p).replace('.', '_')}" data-k="plate" value="${p}" ${cfg.plates.includes(p) ? 'checked' : ''}><span>${p}kg</span></label>`).join('')}</div>
       <p class="small">바벨·머신 종목에는 5kg 단위 무게와 나머지를 채울 경량원판을 함께 보여줘요. 목표 무게 이상이 되는 가장 가벼운 조합을 고르고, 바벨은 그다음으로 좌우가 고른 조합을 골라요.</p></div>`;
 
