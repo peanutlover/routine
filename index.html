@@ -220,11 +220,10 @@ main.wrap { padding-block: 14px 120px; display: grid; gap: 14px; }
 .row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .plates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-.plates label { position: relative; }
-.plates input { position: absolute; opacity: 0; inset: 0; }
-.plates span { display: block; text-align: center; padding: 9px 0; border-radius: 8px; border: 1px solid var(--line); font: 600 17px/1 var(--f-display); }
-.plates input:checked + span { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-.plates input:focus-visible + span { outline: 2px solid var(--dl); outline-offset: 2px; }
+.plates label { display: grid; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--ground); }
+.plates label.on { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.plates span { text-align: center; font: 600 17px/1 var(--f-display); }
+.plates select { width: 100%; min-width: 0; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 6px 4px; font-size: 14px; }
 .swbox { display: grid; gap: 10px; padding: 12px; border-radius: 8px; background: var(--ground); border: 1px solid var(--line); }
 .swbox .field input, .swbox .field select { background: var(--surface); }
 .plan thead th.wrap-h { white-space: normal; min-width: 76px; }
@@ -637,8 +636,28 @@ const RoutineLogic = (() => {
   function slotPos(g) { return ((g % SLOTS) + SLOTS) % SLOTS; }
 
   // ---------- 경량원판 ----------
-  // 5kg 단위는 일반 원판으로 끼우고, 나머지를 가진 경량원판(종류별 한 쌍)과 2.5kg 원판(한 짝도 가능)으로 채운다.
+  // plates: 가진 경량원판 무게 목록. 같은 무게가 n번 있으면 n쌍(2n장). 2.5kg 원판은 개수 제한 없이 늘 쓸 수 있다.
+  // 5kg 단위는 일반 원판으로 끼우고, 나머지를 경량원판과 2.5kg 원판(한 짝도 가능)으로 채운다.
   // 고르는 순서: 목표 무게 이상이면서 가장 가벼운 조합 → (바벨) 양쪽 무게 차이가 작은 조합 → 원판 수가 적은 조합.
+  function plateCounts(plates) {
+    const m = new Map();
+    for (const p of plates || []) if (PLATE_OPTIONS.includes(p)) m.set(p, (m.get(p) || 0) + 1);
+    return m;
+  }
+  // 원판들을 양쪽으로 나눠 무게 차이를 가장 작게 한다 (부분합 DP). [무거운 쪽, 가벼운 쪽, 차이]
+  function splitSides(pieces, total) {
+    const from = new Map([[0, null]]);
+    pieces.forEach((p, j) => {
+      for (const s of [...from.keys()]) if (!from.has(s + p)) from.set(s + p, [s, j]);
+    });
+    let bestS = 0, diff = Infinity;
+    for (const s of from.keys()) { const d = Math.abs(total - 2 * s); if (d < diff) { diff = d; bestS = s; } }
+    const pick = new Set();
+    for (let s = bestS; from.get(s); s = from.get(s)[0]) pick.add(from.get(s)[1]);
+    const L = [], R = [];
+    pieces.forEach((p, j) => (pick.has(j) ? L : R).push(p));
+    return bestS * 2 >= total ? [L, R, diff] : [R, L, diff];
+  }
   const plateMemo = new Map();
   function plateMath(target, plates, equip) {
     if (!(target > 0) || (equip !== 'barbell' && equip !== 'machine')) return null;
@@ -649,40 +668,32 @@ const RoutineLogic = (() => {
     const r = T - base;
     let result = null;
     if (r > 0) {
-      const kinds = [250].concat([...new Set((plates || []).map((p) => Math.round(p * 100)))].filter((p) => p > 0 && p < 250).sort((a, b) => b - a));
+      // [무게, 쓸 수 있는 장수]. 나머지가 5kg 미만이라 2.5kg은 2장이면 충분하다.
+      const kinds = [[250, 2]].concat([...plateCounts(plates)].map(([p, n]) => [Math.round(p * 100), 2 * n])
+        .filter(([p]) => p > 0 && p < 250).sort((a, b) => b[0] - a[0]));
       let min = Infinity;
       const combos = [];
       const walk = (i, total, pieces) => {
-        if (i === kinds.length) {
+        if (total > min) return;
+        if (total >= r || i === kinds.length) {
           if (total < r) return;
           if (total < min) { min = total; combos.length = 0; }
-          if (total === min) combos.push(pieces.slice());
+          combos.push(pieces.slice());
           return;
         }
-        for (let c = 0; c <= 2; c++) {
-          for (let k = 0; k < c; k++) pieces.push(kinds[i]);
-          walk(i + 1, total + c * kinds[i], pieces);
+        const [w, max] = kinds[i];
+        for (let c = 0; c <= max; c++) {
+          for (let k = 0; k < c; k++) pieces.push(w);
+          walk(i + 1, total + c * w, pieces);
           pieces.length -= c;
+          if (total + c * w >= r) break;   // 더 끼우면 무거워지기만 한다
         }
       };
       walk(0, 0, []);
       let best = null;
       for (const pieces of combos) {
         let A = pieces, B = [], diff = 0;
-        if (equip === 'barbell') {
-          let bestMask = 0;
-          diff = Infinity;
-          for (let mask = 0; mask < 1 << pieces.length; mask++) {
-            let a = 0;
-            for (let j = 0; j < pieces.length; j++) if (mask & (1 << j)) a += pieces[j];
-            const d = Math.abs(min - 2 * a);
-            if (d < diff) { diff = d; bestMask = mask; }
-          }
-          const L = [], R = [];
-          pieces.forEach((p, j) => ((bestMask & (1 << j) ? L : R).push(p)));
-          const sl = L.reduce((x, y) => x + y, 0);
-          [A, B] = sl * 2 >= min ? [L, R] : [R, L];
-        }
+        if (equip === 'barbell') [A, B, diff] = splitSides(pieces, min);
         const cand = { A, B, diff, count: pieces.length, pieces };
         const better = !best || (equip === 'barbell' ? cand.diff - best.diff || cand.count - best.count : cand.count - best.count) < 0;
         if (better) best = cand;
@@ -704,12 +715,15 @@ const RoutineLogic = (() => {
     const group = (arr) => { const m = new Map(); for (const p of arr) m.set(p, (m.get(p) || 0) + 1); return [...m]; };
     if (sol.extra === 5) return `${kg(sol.base + 5)}으로 맞추기`;
     let body;
-    if (sol.equip === 'machine') body = group(sol.pieces).map(([p, n]) => `${kg(p)} ${n === 2 ? '두 짝' : '한 짝'}`).join(' + ');
+    if (sol.equip === 'machine') body = group(sol.pieces).map(([p, n]) => `${kg(p)} ${n === 1 ? '한 짝' : n === 2 ? '두 짝' : n + '짝'}`).join(' + ');
     else {
       const same = sol.A.length === sol.B.length && sol.A.every((p, i) => p === sol.B[i]);
       if (same) body = group(sol.A).map(([p, n]) => `${kg(p)} ${n === 1 ? '한 쌍' : n + '쌍'}`).join(' + ');
       else if (!sol.B.length && sol.A.length === 1) body = `${kg(sol.A[0])} 한 짝(한쪽만)`;
-      else body = `한쪽 ${sol.A.map(kg).join('+')} · 반대쪽 ${sol.B.length ? sol.B.map(kg).join('+') : '없음'}`;
+      else {
+        const side = (arr) => (arr.length ? group(arr).map(([p, n]) => kg(p) + (n > 1 ? '×' + n : '')).join('+') : '없음');
+        body = `한쪽 ${side(sol.A)} · 반대쪽 ${side(sol.B)}`;
+      }
     }
     return `${sol.base ? kg(sol.base) + ' + ' : ''}${body}${sol.over > 0 ? ` → ${kg(sol.actual)}` : ''}`;
   }
@@ -749,7 +763,7 @@ const RoutineLogic = (() => {
   return {
     SLOTS, MAIN_STAGES, ACC_TOP, LIGHT, PLATE_OPTIONS, toNum, toStr, weekday, mondayOf, localToday, defaultConfig, migrate,
     startPoint, accAt, initState, prescribe, evaluate, advance, replay, future, projectTo, timeline, canLog, slotType, slotNo, slotPos,
-    ladderReps, eff, dayRows, roundW, fmtW, plateMath, plateText,
+    ladderReps, eff, dayRows, roundW, fmtW, plateCounts, plateMath, plateText,
   };
 })();
 
@@ -763,6 +777,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
   const DOW = ['일', '월', '화', '수', '목', '금', '토'];
   const TYPE_NAME = { D: '데드리프트', S: '스쿼트' };
   const $ = (id) => document.getElementById(id);
+  const PAIR_MAX = 5;        // 경량원판 종류별 최대 쌍 수
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   let today = L.localToday();
@@ -793,7 +808,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
       cv: c.cv,
       startDate: /^\d{4}-\d{2}-\d{2}$/.test(c.startDate) ? c.startDate : today,
       from: sanitizeFrom(c.from),
-      plates: Array.isArray(c.plates) ? c.plates.filter((p) => L.PLATE_OPTIONS.includes(p)) : base.plates,
+      plates: Array.isArray(c.plates) ? [...L.plateCounts(c.plates)].flatMap(([p, n]) => Array(Math.min(n, PAIR_MAX)).fill(p)).sort((a, b) => a - b) : base.plates,
       main: Object.assign({}, base.main, c.main || {}),
       acc: Array.isArray(c.acc)
         ? c.acc.filter((a) => a && a.id && (a.day === 'D' || a.day === 'S')).map((a) => {
@@ -1278,9 +1293,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
       <div class="btnrow"><button class="btn ghost" type="button" data-act="startSheet">시작 지점 바꾸기 · 이어서 시작</button></div>
       <p class="small">쉬는 요일은 따로 없어요. 세션의 6번째 운동을 마친 다음 날 하루 쉬고, 기록하지 않은 날은 쉰 날로 봐요. 무게·횟수를 바꾸면 지난 기록까지 포함해 전체 계획을 다시 계산해요.</p></div>`;
 
+    const cnt = L.plateCounts(cfg.plates);
     h += `<div class="card"><h2>가지고 있는 경량원판</h2>
-      <p class="small">종류마다 한 쌍(2장)이 있다고 보고 계산해요. 2.5kg 원판은 따로 고르지 않아도 늘 함께 쓰고, 필요하면 한 짝(한쪽만)도 쓰게 안내해요.</p>
-      <div class="plates">${L.PLATE_OPTIONS.map((p) => `<label><input type="checkbox" id="set-plate-${String(p).replace('.', '_')}" data-k="plate" value="${p}" ${cfg.plates.includes(p) ? 'checked' : ''}><span>${p}kg</span></label>`).join('')}</div>
+      <p class="small">종류마다 몇 쌍 있는지 골라 주세요. 1쌍 = 2장이에요. 2.5kg 이상 원판은 개수 제한 없이 있다고 보고, 2.5kg은 필요하면 한 짝(한쪽만)도 쓰게 안내해요.</p>
+      <div class="plates">${[...L.PLATE_OPTIONS].map((p) => {
+        const n = cnt.get(p) || 0;
+        const opts = Array.from({ length: PAIR_MAX + 1 }, (_, i) => `<option value="${i}"${i === n ? ' selected' : ''}>${i ? i + '쌍' : '없음'}</option>`).join('');
+        return `<label class="${n ? 'on' : ''}"><span>${p}kg</span><select id="set-plate-${String(p).replace('.', '_')}" data-k="plate" data-w="${p}" aria-label="${p}kg 원판 쌍 수">${opts}</select></label>`;
+      }).join('')}</div>
       <p class="small">바벨·머신 종목에는 5kg 단위 무게와 나머지를 채울 경량원판을 함께 보여줘요. 목표 무게 이상이 되는 가장 가벼운 조합을 고르고, 바벨은 그다음으로 좌우가 고른 조합을 골라요.</p></div>`;
 
     h += `<div class="card"><h2>하체 메인 · 데드리프트와 스쿼트</h2>
@@ -1355,10 +1375,10 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
     const cfg = data.cfg;
     const num = (v) => (v === '' ? NaN : Number(v));
     if (k === 'plate') {
-      const p = Number(el.value);
-      const set = new Set(cfg.plates);
-      if (el.checked) set.add(p); else set.delete(p);
-      cfg.plates = L.PLATE_OPTIONS.filter((x) => set.has(x));
+      const p = Number(el.dataset.w);
+      const n = Math.max(0, Math.min(PAIR_MAX, Math.floor(Number(el.value)) || 0));
+      cfg.plates = cfg.plates.filter((x) => x !== p).concat(Array(n).fill(p)).sort((a, b) => a - b);
+      el.closest('label').classList.toggle('on', n > 0);
     } else if (/^acc\.\d+\.sw\./.test(k)) {
       const [, i, , f] = k.split('.');
       const sw = cfg.acc[+i] && cfg.acc[+i].sw;

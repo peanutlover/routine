@@ -262,8 +262,28 @@ const RoutineLogic = (() => {
   function slotPos(g) { return ((g % SLOTS) + SLOTS) % SLOTS; }
 
   // ---------- 경량원판 ----------
-  // 5kg 단위는 일반 원판으로 끼우고, 나머지를 가진 경량원판(종류별 한 쌍)과 2.5kg 원판(한 짝도 가능)으로 채운다.
+  // plates: 가진 경량원판 무게 목록. 같은 무게가 n번 있으면 n쌍(2n장). 2.5kg 원판은 개수 제한 없이 늘 쓸 수 있다.
+  // 5kg 단위는 일반 원판으로 끼우고, 나머지를 경량원판과 2.5kg 원판(한 짝도 가능)으로 채운다.
   // 고르는 순서: 목표 무게 이상이면서 가장 가벼운 조합 → (바벨) 양쪽 무게 차이가 작은 조합 → 원판 수가 적은 조합.
+  function plateCounts(plates) {
+    const m = new Map();
+    for (const p of plates || []) if (PLATE_OPTIONS.includes(p)) m.set(p, (m.get(p) || 0) + 1);
+    return m;
+  }
+  // 원판들을 양쪽으로 나눠 무게 차이를 가장 작게 한다 (부분합 DP). [무거운 쪽, 가벼운 쪽, 차이]
+  function splitSides(pieces, total) {
+    const from = new Map([[0, null]]);
+    pieces.forEach((p, j) => {
+      for (const s of [...from.keys()]) if (!from.has(s + p)) from.set(s + p, [s, j]);
+    });
+    let bestS = 0, diff = Infinity;
+    for (const s of from.keys()) { const d = Math.abs(total - 2 * s); if (d < diff) { diff = d; bestS = s; } }
+    const pick = new Set();
+    for (let s = bestS; from.get(s); s = from.get(s)[0]) pick.add(from.get(s)[1]);
+    const L = [], R = [];
+    pieces.forEach((p, j) => (pick.has(j) ? L : R).push(p));
+    return bestS * 2 >= total ? [L, R, diff] : [R, L, diff];
+  }
   const plateMemo = new Map();
   function plateMath(target, plates, equip) {
     if (!(target > 0) || (equip !== 'barbell' && equip !== 'machine')) return null;
@@ -274,40 +294,32 @@ const RoutineLogic = (() => {
     const r = T - base;
     let result = null;
     if (r > 0) {
-      const kinds = [250].concat([...new Set((plates || []).map((p) => Math.round(p * 100)))].filter((p) => p > 0 && p < 250).sort((a, b) => b - a));
+      // [무게, 쓸 수 있는 장수]. 나머지가 5kg 미만이라 2.5kg은 2장이면 충분하다.
+      const kinds = [[250, 2]].concat([...plateCounts(plates)].map(([p, n]) => [Math.round(p * 100), 2 * n])
+        .filter(([p]) => p > 0 && p < 250).sort((a, b) => b[0] - a[0]));
       let min = Infinity;
       const combos = [];
       const walk = (i, total, pieces) => {
-        if (i === kinds.length) {
+        if (total > min) return;
+        if (total >= r || i === kinds.length) {
           if (total < r) return;
           if (total < min) { min = total; combos.length = 0; }
-          if (total === min) combos.push(pieces.slice());
+          combos.push(pieces.slice());
           return;
         }
-        for (let c = 0; c <= 2; c++) {
-          for (let k = 0; k < c; k++) pieces.push(kinds[i]);
-          walk(i + 1, total + c * kinds[i], pieces);
+        const [w, max] = kinds[i];
+        for (let c = 0; c <= max; c++) {
+          for (let k = 0; k < c; k++) pieces.push(w);
+          walk(i + 1, total + c * w, pieces);
           pieces.length -= c;
+          if (total + c * w >= r) break;   // 더 끼우면 무거워지기만 한다
         }
       };
       walk(0, 0, []);
       let best = null;
       for (const pieces of combos) {
         let A = pieces, B = [], diff = 0;
-        if (equip === 'barbell') {
-          let bestMask = 0;
-          diff = Infinity;
-          for (let mask = 0; mask < 1 << pieces.length; mask++) {
-            let a = 0;
-            for (let j = 0; j < pieces.length; j++) if (mask & (1 << j)) a += pieces[j];
-            const d = Math.abs(min - 2 * a);
-            if (d < diff) { diff = d; bestMask = mask; }
-          }
-          const L = [], R = [];
-          pieces.forEach((p, j) => ((bestMask & (1 << j) ? L : R).push(p)));
-          const sl = L.reduce((x, y) => x + y, 0);
-          [A, B] = sl * 2 >= min ? [L, R] : [R, L];
-        }
+        if (equip === 'barbell') [A, B, diff] = splitSides(pieces, min);
         const cand = { A, B, diff, count: pieces.length, pieces };
         const better = !best || (equip === 'barbell' ? cand.diff - best.diff || cand.count - best.count : cand.count - best.count) < 0;
         if (better) best = cand;
@@ -329,12 +341,15 @@ const RoutineLogic = (() => {
     const group = (arr) => { const m = new Map(); for (const p of arr) m.set(p, (m.get(p) || 0) + 1); return [...m]; };
     if (sol.extra === 5) return `${kg(sol.base + 5)}으로 맞추기`;
     let body;
-    if (sol.equip === 'machine') body = group(sol.pieces).map(([p, n]) => `${kg(p)} ${n === 2 ? '두 짝' : '한 짝'}`).join(' + ');
+    if (sol.equip === 'machine') body = group(sol.pieces).map(([p, n]) => `${kg(p)} ${n === 1 ? '한 짝' : n === 2 ? '두 짝' : n + '짝'}`).join(' + ');
     else {
       const same = sol.A.length === sol.B.length && sol.A.every((p, i) => p === sol.B[i]);
       if (same) body = group(sol.A).map(([p, n]) => `${kg(p)} ${n === 1 ? '한 쌍' : n + '쌍'}`).join(' + ');
       else if (!sol.B.length && sol.A.length === 1) body = `${kg(sol.A[0])} 한 짝(한쪽만)`;
-      else body = `한쪽 ${sol.A.map(kg).join('+')} · 반대쪽 ${sol.B.length ? sol.B.map(kg).join('+') : '없음'}`;
+      else {
+        const side = (arr) => (arr.length ? group(arr).map(([p, n]) => kg(p) + (n > 1 ? '×' + n : '')).join('+') : '없음');
+        body = `한쪽 ${side(sol.A)} · 반대쪽 ${side(sol.B)}`;
+      }
     }
     return `${sol.base ? kg(sol.base) + ' + ' : ''}${body}${sol.over > 0 ? ` → ${kg(sol.actual)}` : ''}`;
   }
@@ -374,7 +389,7 @@ const RoutineLogic = (() => {
   return {
     SLOTS, MAIN_STAGES, ACC_TOP, LIGHT, PLATE_OPTIONS, toNum, toStr, weekday, mondayOf, localToday, defaultConfig, migrate,
     startPoint, accAt, initState, prescribe, evaluate, advance, replay, future, projectTo, timeline, canLog, slotType, slotNo, slotPos,
-    ladderReps, eff, dayRows, roundW, fmtW, plateMath, plateText,
+    ladderReps, eff, dayRows, roundW, fmtW, plateCounts, plateMath, plateText,
   };
 })();
 

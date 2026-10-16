@@ -196,11 +196,10 @@ main.wrap { padding-block: 14px 120px; display: grid; gap: 14px; }
 .row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .plates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-.plates label { position: relative; }
-.plates input { position: absolute; opacity: 0; inset: 0; }
-.plates span { display: block; text-align: center; padding: 9px 0; border-radius: 8px; border: 1px solid var(--line); font: 600 17px/1 var(--f-display); }
-.plates input:checked + span { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-.plates input:focus-visible + span { outline: 2px solid var(--dl); outline-offset: 2px; }
+.plates label { display: grid; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--ground); }
+.plates label.on { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.plates span { text-align: center; font: 600 17px/1 var(--f-display); }
+.plates select { width: 100%; min-width: 0; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 6px 4px; font-size: 14px; }
 .swbox { display: grid; gap: 10px; padding: 12px; border-radius: 8px; background: var(--ground); border: 1px solid var(--line); }
 .swbox .field input, .swbox .field select { background: var(--surface); }
 .plan thead th.wrap-h { white-space: normal; min-width: 76px; }

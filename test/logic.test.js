@@ -223,6 +223,13 @@ test('경량원판: 5kg 단위 + 나머지를 가진 원판으로 채우기 (요
   assert.equal(t(49.6, [0.5, 1]), '50kg으로 맞추기');
   assert.equal(t(46.3, [0.5, 1]), '45kg + 한쪽 1kg · 반대쪽 0.5kg → 46.5kg');
   assert.equal(L.plateMath(9, [0.5, 1], 'dumbbell'), null);
+  // 개수(쌍): 같은 무게가 n번 = n쌍
+  assert.equal(t(47, [0.5]), '45kg + 2.5kg 한 짝(한쪽만) → 47.5kg');          // 0.5kg 한 쌍으로는 2kg을 못 채움
+  assert.equal(t(47, [0.5, 0.5]), '45kg + 0.5kg 2쌍');
+  assert.equal(t(49, [1, 1]), '45kg + 1kg 2쌍');
+  assert.equal(t(48, [1, 1]), '45kg + 한쪽 1kg×2 · 반대쪽 1kg');
+  assert.equal(t(48, [1, 1], 'machine'), '45kg + 1kg 3짝');
+  assert.equal(t(49, [0.25, 0.25, 0.25, 0.25, 0.25]), '45kg + 한쪽 2.5kg · 반대쪽 0.25kg×6');
   // 2.5kg 한 짝은 경량원판이 1.25kg뿐일 때만 (바벨). 머신은 추에 올리므로 늘 허용.
   // 2.5kg 한 짝은 가진 경량원판과 상관없이 쓸 수 있다 (무게 차이를 줄이려고)
   assert.equal(t(46, []), '45kg + 2.5kg 한 짝(한쪽만) → 47.5kg');
