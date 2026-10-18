@@ -129,7 +129,7 @@ test('기록하지 않은 날은 쉰 날로 보고 다음 운동이 밀린다, 6
   const tl2 = L.timeline(c, six, L.toStr(start + 7), { until: start + 14 });
   assert.equal(tl2.days.get(start + 4).kind, 'miss');
   assert.equal(tl2.days.get(start + 7).kind, 'gap');
-  assert.equal(L.canLog(tl2, start + 7), false);  // 오늘이 휴식일이면 기록하지 않음
+  assert.equal(L.canLog(tl2, start + 7), true);   // 휴식일에도 운동했다면 기록할 수 있음
   assert.equal(tl2.days.get(start + 8).slot, 6);
 });
 
@@ -254,4 +254,78 @@ test('예전 설정(첫 판)을 새 규칙으로 옮긴다', () => {
   const logs = sessionLogs(L.toNum(TODAY));
   assert.deepEqual(L.replay(m, logs).map((s) => [s.no, s.first, r1(s.presc.main.dl)]), [[1, 0, 40], [2, 0, 42]]);
   assert.equal(L.timeline(m, logs, TODAY).days.get(L.toNum(TODAY)).slot, 0);
+});
+
+// ---------- 일부만 기록 · 밀림 · 휴식 ----------
+const ALL_D = { dl: true, lat: true, curl: true, ohp: true };
+const ALL_S = { sq: true, press: true, tri: true, side: true, rear: true };
+const P = (d, res) => ({ d: L.toStr(d), res, p: 1 });
+const rowOf = (e, id) => e.rows.find((r) => r.id === id);
+
+test('고르지 않은 종목은 밀린다: 덤벨프레스를 한 번 빼면 다음 세션 첫 스쿼트 날에 지난 세션 몫을 채운다', () => {
+  const c = cfg();
+  const s = L.toNum(TODAY);
+  const noPress = { sq: true, tri: true, side: true, rear: true };
+  const logs = [P(s, ALL_D), P(s + 1, noPress), P(s + 2, ALL_D), P(s + 3, ALL_S), P(s + 4, ALL_D), P(s + 5, ALL_S)];
+  const sim = L.simulate(c, logs, L.toStr(s + 6), { until: s + 14 });
+  assert.deepEqual([sim.cur.no, sim.cur.n], [2, 0]);                       // 하체는 세션 1을 마침
+  assert.equal(sim.days.get(s + 6).kind, 'gap');
+  assert.deepEqual([sim.real.acc.press, sim.real.acc.side], [0, 1]);     // 덤벨프레스는 아직 세션 1, 다른 종목은 세션 2
+  const day1 = sim.days.get(s + 1);
+  assert.equal(rowOf(day1, 'press').result, null);                       // 안 한 종목
+  const s3 = rowOf(sim.days.get(s + 3), 'press');
+  assert.deepEqual([s3.avail, s3.lag, s3.accNo, s3.reps], ['ok', true, 1, 3]);
+  const n1 = rowOf(sim.days.get(s + 8), 'press');                        // 세션 2의 첫 스쿼트 날: 세션 1의 3번째(3회)
+  assert.deepEqual([sim.days.get(s + 8).no, n1.avail, n1.lag, n1.accNo, n1.reps], [2, 'ok', true, 1, 3]);
+  const n2 = rowOf(sim.days.get(s + 10), 'press');                       // 그다음부터 세션 2 몫(4회), 계속 한 번씩 밀려 감
+  assert.deepEqual([n2.accNo, n2.reps, n2.lag], [2, 4, true]);
+  assert.deepEqual([rowOf(sim.days.get(s + 8), 'side').accNo, rowOf(sim.days.get(s + 8), 'side').reps], [2, 11]); // 다른 종목은 제 차례
+});
+
+test('하체를 고르지 않으면 다음 날도 같은 하체 날, 이미 한 보조 종목은 하체보다 앞서지 않고 쉰다', () => {
+  const c = cfg();
+  const s = L.toNum(TODAY);
+  const sim = L.simulate(c, [P(s, { lat: true, curl: true })], L.toStr(s + 1), { until: s + 7 });
+  const today = sim.days.get(s + 1);
+  assert.deepEqual([today.type, today.g, sim.cur.n], ['D', 0, 0]);
+  assert.deepEqual(['dl', 'lat', 'curl', 'ohp'].map((id) => rowOf(today, id).avail), ['ok', 'wait', 'wait', 'ok']);
+  assert.equal(rowOf(today, 'ohp').reps, 5);
+  const d3 = sim.days.get(s + 3);                                          // 다음 데드 날에는 랫풀다운·덤벨컬도 제 차례(세션 1의 2번째)
+  assert.deepEqual([d3.type, rowOf(d3, 'lat').avail, rowOf(d3, 'lat').lag], ['D', 'ok', false]);
+});
+
+test('세션 6회 중 2일 이상 쉬었으면 정식 휴식을 건너뛰고, 1일이면 쉰다', () => {
+  const c = cfg();
+  const s = L.toNum(TODAY);
+  const two = [0, 2, 4, 5, 6, 7].map((k, i) => P(s + k, i % 2 ? ALL_S : ALL_D));    // 1일·3일 쉼
+  const sim = L.simulate(c, two, L.toStr(s + 8), { until: s + 10 });
+  assert.deepEqual([sim.days.get(s + 1).kind, sim.days.get(s + 3).kind], ['miss', 'miss']);
+  assert.equal(sim.main[0].rests, 2);
+  const nx = sim.days.get(s + 8);
+  assert.deepEqual([nx.kind, nx.no, nx.pos, nx.restSkipped], ['plan', 2, 0, true]);
+  const one = [0, 2, 3, 4, 5, 6].map((k, i) => P(s + k, i % 2 ? ALL_S : ALL_D));    // 1일만 쉼
+  assert.equal(L.simulate(c, one, L.toStr(s + 7), { until: s + 9 }).days.get(s + 7).kind, 'gap');
+});
+
+test('휴식일에 운동을 기록하면 운동한 날로 계산한다', () => {
+  const c = cfg();
+  const s = L.toNum(TODAY);
+  const six = [0, 1, 2, 3, 4, 5].map((k) => P(s + k, k % 2 ? ALL_S : ALL_D));
+  const sim = L.simulate(c, six, L.toStr(s + 6), { until: s + 9 });
+  assert.equal(sim.days.get(s + 6).kind, 'gap');
+  assert.equal(L.canLog(sim, s + 6), true);                                 // 오늘이 휴식일이어도 기록 가능
+  assert.deepEqual([sim.next.no, sim.next.pos, sim.next.type], [2, 0, 'D']);
+  const sim2 = L.simulate(c, six.concat(P(s + 6, ALL_D)), L.toStr(s + 7), { until: s + 9 });
+  assert.deepEqual([sim2.days.get(s + 6).kind, sim2.days.get(s + 6).no, sim2.cur.n], ['log', 2, 1]);
+  assert.deepEqual([sim2.days.get(s + 7).type, sim2.days.get(s + 7).pos], ['S', 1]);
+});
+
+test('밀린 종목도 세션 결과·증량 규칙은 그대로: 4단계 세션은 쉬고 묶음 성공 뒤 증량', () => {
+  const c = cfg();
+  const s = L.toNum(TODAY);
+  const logs = [P(s, ALL_D), P(s + 1, { sq: true, tri: true, side: true, rear: true })];
+  const sim = L.simulate(c, logs, L.toStr(s + 2), { minSessions: 7 });
+  const v = (no) => sim.view(no).acc.press;
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map((no) => (v(no).skip ? '휴식' : `${v(no).w}x${v(no).reps}`)), ['7x3', '7x4', '7x5', '휴식', '8x3', '8x4']);
+  assert.deepEqual([1, 2, 3, 4, 5].map((no) => r1(sim.view(no).main.dl)), [40, 42, 44.1, 46.3, 42]);
 });

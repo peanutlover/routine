@@ -97,22 +97,24 @@ const RoutineLogic = (() => {
     return isLight(a, s) ? Math.max(1, LIGHT.reps + LIGHT.step * s.step) : Math.max(1, a.reps + s.step);
   }
 
-  function prescribe(cfg, st, no) {
-    const m = st.main;
-    const top = m.level === m.start + MAIN_STAGES - 1;
+  function mainPresc(cfg, m) {
     const dl = cfg.main.dl * Math.pow(1 + cfg.main.pct / 100, m.level);
-    const main = { dl, sq: dl / cfg.main.ratio, level: m.level, bundle: m.bundle, stage: m.level - m.start + 1, top, retry: m.fail };
+    return { dl, sq: dl / cfg.main.ratio, level: m.level, bundle: m.bundle, stage: m.level - m.start + 1, top: m.level === m.start + MAIN_STAGES - 1, retry: m.fail };
+  }
+  // 보조 종목의 세션 처방. off = 아직 들어가지 않은 종목, skip = 하체 4단계 세션이라 쉼.
+  function accPresc(a, s, no, top) {
+    if (!s || no < (a.from || 1)) return { off: true };
+    if (top) return { skip: true };
+    const e = eff(a, s);
+    return {
+      name: e.name, equip: e.equip, inc: e.inc, incV: e.incV, phase: s.phase,
+      w: s.w, n: s.n, reps: ladderReps(a, s), step: s.step, hold: s.done, retry: s.fail, light: isLight(a, s),
+    };
+  }
+  function prescribe(cfg, st, no) {
+    const main = mainPresc(cfg, st.main);
     const acc = {};
-    for (const a of cfg.acc) {
-      const s = st.acc[a.id];
-      if (!s || no < (a.from || 1)) { acc[a.id] = { off: true }; continue; }
-      if (top) { acc[a.id] = { skip: true }; continue; }
-      const e = eff(a, s);
-      acc[a.id] = {
-        name: e.name, equip: e.equip, inc: e.inc, incV: e.incV, phase: s.phase,
-        w: s.w, n: s.n, reps: ladderReps(a, s), step: s.step, hold: s.done, retry: s.fail, light: isLight(a, s),
-      };
-    }
+    for (const a of cfg.acc) acc[a.id] = accPresc(a, st.acc[a.id], no, main.top);
     return { no, main, acc };
   }
 
@@ -137,73 +139,42 @@ const RoutineLogic = (() => {
     return { w, phase: s.phase };
   }
 
-  function advance(cfg, st, out) {
-    const nx = JSON.parse(JSON.stringify(st));
-    const m = nx.main;
+  // 하체 한 세션의 결과로 다음 상태. bundleDone = 4단계를 성공해 묶음을 마침(상체·팔 증량 시점).
+  function advanceMain(st, ok) {
+    const m = Object.assign({}, st);
     let bundleDone = false;
-    if (out.main) {
+    if (ok) {
       if (m.level === m.start + MAIN_STAGES - 1) { m.start += 1; m.level = m.start; m.bundle += 1; bundleDone = true; }
       else m.level += 1;
       m.fail = false;
     } else {
       m.level -= 1; m.fail = true;
     }
-    for (const a of cfg.acc) {
-      const s = nx.acc[a.id], r = out.acc[a.id];
-      if (!s || r == null) continue;
+    return { m, bundleDone };
+  }
+  // 보조 종목 한 세션의 결과(r: true·false, 쉰 세션은 null)와 그 세션 하체의 묶음 완료 여부로 다음 상태.
+  function advanceAcc(a, st, r, bundleDone) {
+    const s = Object.assign({}, st);
+    if (r != null) {
       if (r) { if (s.step < ACC_TOP) s.step += 1; else s.done = true; s.fail = false; }
       else { s.step -= 1; s.done = false; s.fail = true; }
     }
-    if (bundleDone) {
-      for (const a of cfg.acc) {
-        const s = nx.acc[a.id];
-        if (!s || !s.done) continue;
-        const up = raise(a, s);
-        s.w = up.w; s.phase = up.phase; s.n += 1; s.step = 0; s.done = false;
-      }
+    if (bundleDone && s.done) {
+      const up = raise(a, s);
+      s.w = up.w; s.phase = up.phase; s.n += 1; s.step = 0; s.done = false;
     }
-    return nx;
+    return s;
+  }
+  function advance(cfg, st, out) {
+    const { m, bundleDone } = advanceMain(st.main, out.main);
+    const acc = {};
+    for (const a of cfg.acc) acc[a.id] = st.acc[a.id] && advanceAcc(a, st.acc[a.id], out.acc[a.id], bundleDone);
+    return { main: m, acc };
   }
 
   const slotType = (i) => (i % 2 === 0 ? 'D' : 'S');
 
-  // 기록을 시작 지점부터 다시 돌려 세션별 처방을 만든다. 마지막 원소가 진행 중인(또는 다음) 세션.
-  // 시작 세션은 k번째 운동부터 기록하고, 그 앞 운동(앱을 쓰기 전에 한 것)은 성공으로 본다. first = 세션에서 첫 기록의 순서.
-  function replay(cfg, logs) {
-    const sp = startPoint(cfg);
-    const sessions = [];
-    let st = initState(cfg);
-    let i = 0;
-    for (let no = sp.no; ; no++) {
-      const first = no === sp.no ? sp.k : 0;
-      const need = SLOTS - first;
-      const chunk = logs.slice(i, i + need);
-      const presc = prescribe(cfg, st, no);
-      const sess = { no, first, state: st, presc, logs: chunk, done: chunk.length === need };
-      sessions.push(sess);
-      if (!sess.done) break;
-      i += need;
-      sess.out = evaluate(cfg, presc, chunk.map((lg, j) => ({ type: slotType(first + j), res: lg.res })));
-      st = advance(cfg, st, sess.out);
-    }
-    return sessions;
-  }
-
   const ALL_OK = [{ type: 'D', res: {} }, { type: 'S', res: {} }];
-
-  // 진행 중인 세션 이후를 "남은 운동은 모두 성공"으로 가정해 예상한다.
-  function future(cfg, sessions, count) {
-    const cur = sessions[sessions.length - 1];
-    const entries = cur.logs.map((lg, j) => ({ type: slotType(cur.first + j), res: lg.res }));
-    let st = advance(cfg, cur.state, evaluate(cfg, cur.presc, entries));
-    const out = [];
-    for (let j = 1; j <= count; j++) {
-      const presc = prescribe(cfg, st, cur.no + j);
-      out.push({ no: cur.no + j, first: 0, state: st, presc, logs: [], projected: true });
-      st = advance(cfg, st, evaluate(cfg, presc, ALL_OK));
-    }
-    return out;
-  }
 
   // 지금 시작 지점에서 모든 세션을 성공한다고 보고 세션 no의 상태·처방을 구한다. 시작 세션보다 앞이면 null.
   // 이미 하던 루틴을 이어서 시작할 때 무게·횟수를 미리 채우는 데 쓴다.
@@ -215,46 +186,172 @@ const RoutineLogic = (() => {
     return { state: st, presc: prescribe(cfg, st, no) };
   }
 
-  // ---------- 달력 ----------
-  // 고정 쉬는 요일 없음. 세션의 6번째 운동 다음 날만 쉰다.
-  // kind: log(기록됨) plan(예정) gap(세션 간 휴식) miss(지난 날, 기록 없음 = 쉰 날). 시작일 이전은 맵에 없음.
-  // slot: 시작 세션의 첫 운동을 0으로 센 칸 번호. i번째 기록의 칸 = 시작 지점의 k + i.
-  function timeline(cfg, logs, today, opts = {}) {
-    const days = new Map();
-    const slotDate = [];
-    const k0 = startPoint(cfg).k;
-    const start = toNum(cfg.startDate);
-    const T = toNum(today);
-    let last = null;
-    logs.forEach((lg, i) => { const d = toNum(lg.d); days.set(d, { kind: 'log', slot: k0 + i }); slotDate[k0 + i] = d; last = d; });
-    logs.forEach((lg, i) => {
-      if ((k0 + i + 1) % SLOTS !== 0) return;
-      const g = toNum(lg.d) + 1;
-      if (!days.has(g)) days.set(g, { kind: 'gap' });
-    });
-    const cursor = Math.max(T, start, last == null ? -Infinity : last + 1);
-    for (let d = start; d < cursor; d++) if (!days.has(d)) days.set(d, { kind: 'miss' });
-    let idx = k0 + logs.length;
-    let forced = logs.length > 0 && idx % SLOTS === 0 ? last + 1 : null;
-    const until = opts.until == null ? cursor + 6 : opts.until;
-    const minSlots = opts.minSlots || 0;
-    for (let d = cursor, guard = 0; (d <= until || idx < minSlots) && guard < 4000; d++, guard++) {
-      if (d === forced) { if (!days.has(d)) days.set(d, { kind: 'gap' }); continue; }
-      days.set(d, { kind: 'plan', slot: idx });
-      slotDate[idx] = d;
-      idx += 1;
-      if (idx % SLOTS === 0) forced = d + 1;
-    }
-    return { days, slotDate, start, cursor, today: T, last, k0 };
+  // ---------- 진행 엔진 (기록 → 달력·처방) ----------
+  // 하체(데드리프트·스쿼트)는 칸 g를 따라 D·S를 번갈아 가고 6칸이 한 세션이다. g = 시작 세션의 첫 운동을 0으로 센 칸 번호.
+  // 상체·팔은 자기 하체 날(D 또는 S)에 붙어서 세션마다 3번씩 하고, 진도는 종목마다 따로 센다.
+  // 기록에서 고르지 않은 종목은 하지 않은 것으로 보고 다음 같은 날로 밀린다. 하체를 안 하면 다음 날도 같은 하체 날이다.
+  // 상체·팔은 하체보다 앞서지 못한다: 다음 차례 칸이 오늘 하체 칸보다 뒤면 그날은 쉰다(붙어서 가느라 생긴 휴식).
+  // 세션 6번째 운동 다음 날은 정식 휴식. 단, 그 세션을 하는 동안 REST_SKIP일 이상 쉬었다면 건너뛴다.
+  // 휴식일에도 기록하면 운동한 날로 계산한다.
+  // 기록 형식: {d, res:{종목id: true|false}, p:1}. p가 없는 예전 기록은 고르지 않은 종목을 성공으로 본다.
+  const REST_SKIP = 2;
+  const accSlot = (type, j) => SLOTS * Math.floor(j / 3) + 2 * (j % 3) + (type === 'S' ? 1 : 0);
+
+  function mainRow(cfg, mp, type) {
+    return {
+      id: type === 'D' ? 'dl' : 'sq', name: type === 'D' ? '데드리프트' : '스쿼트', part: '하체', main: true, equip: 'barbell',
+      w: type === 'D' ? mp.dl : mp.sq, n: 0, reps: cfg.main.reps, sets: cfg.main.sets, rest: cfg.main.rest, retry: mp.retry,
+    };
+  }
+  function accRow(a, p) {
+    if (p.skip) return { id: a.id, name: a.name, part: a.part, skip: true };
+    return {
+      id: a.id, name: p.name, part: a.part, equip: p.equip, phase: p.phase, w: p.w, n: p.n, inc: p.inc, incV: p.incV,
+      reps: p.reps, sets: a.sets, rest: a.rest, hold: p.hold, retry: p.retry, light: p.light,
+    };
   }
 
-  // 그 날짜에 "다음 운동"을 기록할 수 있는가: 오늘의 예정일, 또는 마지막 기록 이후의 지난 날.
-  // 지나간 휴식일도 실제로 운동했다면 기록할 수 있다 (지난 기록을 이어서 넣을 때).
-  function canLog(tl, d) {
-    const e = tl.days.get(d);
-    if (!e || d > tl.today) return false;
-    if (tl.last != null && d <= tl.last) return false;
-    return e.kind === 'plan' || e.kind === 'miss' || (e.kind === 'gap' && d < tl.today);
+  // opts.until: 이 날까지 예상(모두 성공 가정)을 채운다. opts.minSessions: 하체·모든 보조 종목이 적어도 이만큼 세션을 갖도록 채운다.
+  function simulate(cfg, logs, today, opts = {}) {
+    const sp = startPoint(cfg);
+    const init = initState(cfg);
+    const S = [];
+    const openMain = (i, m) => {
+      S[i] = { no: sp.no + i, i, state: m, presc: mainPresc(cfg, m), first: i === 0 ? sp.k : 0, n: i === 0 ? sp.k : 0, res: [],
+        done: false, out: null, bundleDone: false, firstDay: null, lastDay: null, rests: 0, restSkip: false };
+    };
+    openMain(0, init.main);
+    const openAcc = (X, i, st) => { X.sess[i] = { no: sp.no + i, i, state: st, presc: null, res: [], done: false, out: null }; };
+    const A = cfg.acc.map((a) => {
+      const X = { a, i: 0, j: a.day === 'D' ? Math.ceil(sp.k / 2) : Math.floor(sp.k / 2), sess: [] };
+      openAcc(X, 0, init.acc[a.id]);
+      return X;
+    });
+    const accP = (X, i) => { const s = X.sess[i]; if (!s.presc) s.presc = accPresc(X.a, s.state, s.no, S[i].presc.top); return s.presc; };
+    // 보조 종목이 세션 몫(3번)을 다 했거나 쉬는 세션이면, 그 세션의 하체가 끝난 뒤 다음 세션으로 넘긴다.
+    function settle(X) {
+      for (;;) {
+        const i = X.i, s = X.sess[i];
+        const p = accP(X, i);
+        if (p.off || p.skip) X.j = Math.max(X.j, 3 * (i + 1));
+        if (X.j < 3 * (i + 1) || !S[i].done) return;
+        s.done = true;
+        s.out = p.off || p.skip ? null : !s.res.includes(false);
+        openAcc(X, i + 1, advanceAcc(X.a, s.state, s.out, S[i].bundleDone));
+        X.i = i + 1;
+      }
+    }
+    let g = sp.k;
+    // 그 날 할 운동: 하체 칸 g의 하체 + 그 날에 붙는 보조 종목들의 다음 차례.
+    // avail: ok(오늘 함) · skip(하체 4단계라 쉼) · wait(하체보다 앞서지 않으려고 쉼). lag = 지난 차례가 밀려서 하는 것.
+    function plan() {
+      const i = S.length - 1, type = slotType(g);
+      const rows = [Object.assign(mainRow(cfg, S[i].presc, type), { avail: 'ok' })];
+      for (const X of A) {
+        if (X.a.day !== type) continue;
+        settle(X);
+        const p = accP(X, X.i);
+        if (p.off) continue;
+        if (p.skip) { rows.push(Object.assign(accRow(X.a, p), { avail: 'skip' })); continue; }
+        const at = accSlot(X.a.day, X.j);
+        rows.push(Object.assign(accRow(X.a, p), { avail: at <= g ? 'ok' : 'wait', lag: at < g, accNo: X.sess[X.i].no }));
+      }
+      return { g, slot: g, type, no: S[i].no, pos: slotPos(g), main: S[i].presc, rows };
+    }
+    let restDay = null, skipNote = null;
+    function apply(d, info, res, legacy) {
+      const got = (id) => (legacy ? res[id] !== false : typeof res[id] === 'boolean' ? res[id] : null);
+      for (const r of info.rows) {
+        r.result = r.avail === 'ok' ? got(r.id) : null;
+        if (r.main || r.result == null) continue;
+        const X = A.find((x) => x.a.id === r.id);
+        X.sess[X.i].res.push(r.result);
+        X.j += 1;
+      }
+      const mv = info.rows[0].result;
+      const cur = S[S.length - 1];
+      if (mv != null) {
+        if (cur.firstDay == null) cur.firstDay = d;
+        cur.lastDay = d;
+        cur.res.push(mv);
+        cur.n += 1;
+        g += 1;
+        if (cur.n === SLOTS) {
+          cur.done = true;
+          cur.out = !cur.res.includes(false);
+          const nx = advanceMain(cur.state, cur.out);
+          cur.bundleDone = nx.bundleDone;
+          cur.restSkip = cur.rests >= REST_SKIP;
+          openMain(cur.i + 1, nx.m);
+          restDay = cur.restSkip ? null : d + 1;
+          skipNote = cur.restSkip ? d + 1 : null;
+        }
+      }
+      for (const X of A) settle(X);
+    }
+    const days = new Map();
+    const quiet = (d) => {
+      const kind = d === restDay ? 'gap' : 'miss';
+      days.set(d, { kind });
+      const cur = S[S.length - 1];
+      if (kind === 'miss' && cur.firstDay != null) cur.rests += 1;
+    };
+    const start = toNum(cfg.startDate);
+    const T = today == null ? -Infinity : toNum(today);
+    let d = start, last = null;
+    logs.forEach((lg, li) => {
+      const ld = toNum(lg.d);
+      for (; d < ld; d++) quiet(d);
+      const info = plan();
+      days.set(ld, Object.assign(info, { kind: 'log', li, restSkipped: ld === skipNote }));
+      apply(ld, info, lg.res || {}, !lg.p);
+      last = ld;
+      d = ld + 1;
+    });
+    const cursor = Math.max(T, start, last == null ? -Infinity : last + 1);
+    for (; d < cursor; d++) quiet(d);
+    const next = plan();
+    const c = S[S.length - 1];
+    const cur = { i: c.i, no: c.no, n: c.n, presc: c.presc };
+    const real = { main: c.i, acc: Object.fromEntries(A.map((X) => [X.a.id, X.i])) };
+    const until = opts.until == null ? cursor + 6 : opts.until;
+    const need = opts.minSessions || 0;
+    const short = () => S.length < need || A.some((X) => X.sess.length < need);
+    for (let guard = 0; (d <= until || short()) && guard < 4000; d++, guard++) {
+      if (d === restDay) { days.set(d, { kind: 'gap' }); continue; }
+      const info = plan();
+      const res = {};
+      for (const r of info.rows) if (r.avail === 'ok') res[r.id] = true;
+      days.set(d, Object.assign(info, { kind: 'plan', restSkipped: d === skipNote }));
+      apply(d, info, res, false);
+    }
+    // 세션 no의 처방(하체 + 보조 종목 세션별). 보조 종목이 아직 그 세션에 이르지 않았으면 pending.
+    function view(no) {
+      const i = no - sp.no, s = S[i];
+      if (!s) return null;
+      const acc = {};
+      for (const X of A) acc[X.a.id] = X.sess[i] ? accP(X, i) : { pending: true };
+      return { no, main: s.presc, acc };
+    }
+    return {
+      days, today: T, start, cursor, last, k0: sp.k, next, cur, real, view,
+      main: S, acc: Object.fromEntries(A.map((X) => [X.a.id, X.sess])),
+    };
+  }
+  const timeline = simulate;
+
+  // 하체 세션 목록 (예상 없이 기록까지만). 마지막 원소가 진행 중인(또는 다음) 세션.
+  function replay(cfg, logs) {
+    const sim = simulate(cfg, logs, null, { until: -Infinity });
+    return sim.main.map((s) => ({ no: s.no, first: s.first, done: s.done, out: s.out, presc: sim.view(s.no) }));
+  }
+
+  // 그 날짜에 다음 운동을 기록할 수 있는가: 마지막 기록 이후의 오늘·지난 날 (휴식일 포함).
+  function canLog(sim, d) {
+    const e = sim.days.get(d);
+    if (!e || d > sim.today) return false;
+    if (sim.last != null && d <= sim.last) return false;
+    return e.kind === 'plan' || e.kind === 'miss' || e.kind === 'gap';
   }
 
   // 칸 번호 → 세션 번호, 세션 안 순서(0~5)
@@ -356,20 +453,11 @@ const RoutineLogic = (() => {
 
   // ---------- 표시용 ----------
   function dayRows(cfg, presc, type) {
-    const mm = presc.main;
-    const rows = [{
-      id: type === 'D' ? 'dl' : 'sq', name: type === 'D' ? '데드리프트' : '스쿼트', part: '하체', main: true, equip: 'barbell',
-      w: type === 'D' ? mm.dl : mm.sq, n: 0, reps: cfg.main.reps, sets: cfg.main.sets, rest: cfg.main.rest, retry: mm.retry,
-    }];
+    const rows = [mainRow(cfg, presc.main, type)];
     for (const a of cfg.acc) {
-      if (a.day !== type) continue;
       const p = presc.acc[a.id];
-      if (p.off) continue;
-      if (p.skip) { rows.push({ id: a.id, name: a.name, part: a.part, skip: true }); continue; }
-      rows.push({
-        id: a.id, name: p.name, part: a.part, equip: p.equip, phase: p.phase, w: p.w, n: p.n, inc: p.inc, incV: p.incV,
-        reps: p.reps, sets: a.sets, rest: a.rest, hold: p.hold, retry: p.retry, light: p.light,
-      });
+      if (a.day !== type || !p || p.off || p.pending) continue;
+      rows.push(accRow(a, p));
     }
     return rows;
   }
@@ -388,7 +476,7 @@ const RoutineLogic = (() => {
 
   return {
     SLOTS, MAIN_STAGES, ACC_TOP, LIGHT, PLATE_OPTIONS, toNum, toStr, weekday, mondayOf, localToday, defaultConfig, migrate,
-    startPoint, accAt, initState, prescribe, evaluate, advance, replay, future, projectTo, timeline, canLog, slotType, slotNo, slotPos,
+    startPoint, accAt, initState, prescribe, evaluate, advance, replay, projectTo, simulate, timeline, canLog, slotType, slotNo, slotPos, REST_SKIP,
     ladderReps, eff, dayRows, roundW, fmtW, plateCounts, plateMath, plateText,
   };
 })();

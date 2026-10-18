@@ -51,7 +51,7 @@
     const seen = new Set();
     const logs = x.logs
       .filter((l) => l && /^\d{4}-\d{2}-\d{2}$/.test(l.d) && !seen.has(l.d) && seen.add(l.d))
-      .map((l) => ({ d: l.d, res: l.res && typeof l.res === 'object' ? l.res : {} }))
+      .map((l) => Object.assign({ d: l.d, res: l.res && typeof l.res === 'object' ? l.res : {} }, l.p ? { p: 1 } : {}))
       .sort((a, b) => (a.d < b.d ? -1 : 1));
     return { v: 1, updatedAt: +x.updatedAt || 0, started: !!x.started || logs.length > 0, cfg, logs };
   }
@@ -114,16 +114,10 @@
   }
 
   // ---------- 계산 ----------
-  function model(until, minSlots = 0) {
-    const cfg = data.cfg;
-    const sessions = L.replay(cfg, data.logs);
-    const tl = L.timeline(cfg, data.logs, today, { until, minSlots });
-    const first = sessions[0].no;
-    const cur = sessions[sessions.length - 1];
-    const maxNo = L.slotNo(cfg, Math.max(0, tl.slotDate.length - 1));
-    const all = sessions.concat(L.future(cfg, sessions, Math.max(1, maxNo - cur.no + 1)));
-    // 칸 번호(slot) = 시작 지점의 k + 기록 순서. 기록은 data.logs[slot - k0]
-    return { cfg, sessions, tl, k0: tl.k0, first, cur, sess: (no) => all[no - first], log: (slot) => data.logs[slot - tl.k0] };
+  // sim: 기록을 처음부터 다시 돌린 결과(달력·처방). until 날짜까지, minSessions 세션까지 예상(모두 성공 가정)을 채운다.
+  function model(until, minSessions = 0) {
+    const sim = L.simulate(data.cfg, data.logs, today, { until, minSessions });
+    return { cfg: data.cfg, sim, tl: sim, cur: sim.cur };
   }
 
   const md = (n) => { const s = L.toStr(n); return +s.slice(5, 7) + '.' + +s.slice(8, 10); };
@@ -144,6 +138,7 @@
     let f = '';
     if (row.retry) f += '<span class="flag retry">재도전</span>';
     if (row.hold) f += '<span class="flag hold">유지</span>';
+    if (row.lag) f += `<span class="flag lag">밀림 · 세션 ${row.accNo} 몫</span>`;
     return f;
   }
 
@@ -160,8 +155,7 @@
 
   function renderHeader(m) {
     const cur = m.cur;
-    const k = cur.first + cur.logs.length;
-    $('status').innerHTML = `<strong>세션 ${cur.no}</strong> · ${k}/6 완료<br>${esc(stageText(cur.presc.main))}`;
+    $('status').innerHTML = `<strong>세션 ${cur.no}</strong> · ${cur.n}/6 완료<br>${esc(stageText(cur.presc))}`;
     const showWeek = tab === 'week';
     document.querySelector('.weeknav').hidden = !showWeek;
     $('strip').hidden = !showWeek;
@@ -174,8 +168,8 @@
       const e = m.tl.days.get(d);
       let cls = '';
       if (e && (e.kind === 'plan' || e.kind === 'log')) {
-        cls = L.slotType(e.slot);
-        if (e.kind === 'log') cls += Object.values(m.log(e.slot).res).includes(false) ? ' fail' : ' done';
+        cls = e.type;
+        if (e.kind === 'log') cls += e.rows.some((r) => r.result === false) ? ' fail' : ' done';
       } else if (e && e.kind === 'gap') cls = 'rest';
       else if (e && e.kind === 'miss') cls = 'miss';
       html += `<button type="button" role="listitem" data-act="jump" data-day="${d}" class="${d === m.tl.today ? 'is-today' : ''}">
@@ -184,21 +178,26 @@
     $('strip').innerHTML = html;
   }
 
-  function exTable(rows, res) {
-    const live = rows.filter((r) => !r.skip);
-    const skipped = rows.filter((r) => r.skip);
-    let h = `<table class="ex"><thead><tr><th>종목</th><th class="c-w">무게</th><th class="c-r">회×세트</th><th class="c-t">휴식</th>${res ? '<th class="c-s"><span hidden>결과</span></th>' : ''}</tr></thead><tbody>`;
+  // rows: 그 날 할 운동(avail ok·skip·wait). logged면 종목별 결과(✓·✗·안 함)를 붙인다.
+  function exTable(rows, logged, type) {
+    const live = rows.filter((r) => r.avail === 'ok');
+    const skipped = rows.filter((r) => r.avail === 'skip');
+    const waiting = rows.filter((r) => r.avail === 'wait');
+    let h = `<table class="ex"><thead><tr><th>종목</th><th class="c-w">무게</th><th class="c-r">회×세트</th><th class="c-t">휴식</th>${logged ? '<th class="c-s"><span hidden>결과</span></th>' : ''}</tr></thead><tbody>`;
     let unbalanced = false;
     for (const r of live) {
-      const mark = res ? (res[r.id] === false ? '<span class="bad-t" aria-label="실패">✗</span>' : '<span class="ok-t" aria-label="성공">✓</span>') : '';
-      const pl = plates(r);
+      const mark = !logged ? '' : r.result === true ? '<span class="ok-t" aria-label="성공">✓</span>'
+        : r.result === false ? '<span class="bad-t" aria-label="실패">✗</span>' : '<span class="no-t" aria-label="안 함">–</span>';
+      const undone = logged && r.result == null;
+      const pl = undone ? null : plates(r);
       if (pl && pl.sol.unbalanced) unbalanced = true;
-      h += `<tr class="${r.main ? 'main' : ''}${pl ? ' with-plate' : ''}"><td><div class="nm">${esc(r.name)}${flags(r)}</div><div class="pt">${esc(r.main ? '하체 메인' : r.part)}</div></td>
-        <td class="c-w">${wHtml(r)}</td><td class="c-r">${r.reps}×${r.sets}</td><td class="c-t">${esc(r.rest)}</td>${res ? `<td class="c-s">${mark}</td>` : ''}</tr>`;
-      if (pl) h += `<tr class="plate"><td colspan="${res ? 5 : 4}"><span class="pl">${pl.label}</span>${esc(pl.text)}</td></tr>`;
+      h += `<tr class="${r.main ? 'main' : ''}${pl ? ' with-plate' : ''}${undone ? ' undone' : ''}"><td><div class="nm">${esc(r.name)}${flags(r)}</div><div class="pt">${esc(r.main ? '하체 메인' : r.part)}${undone ? ' · 안 함 → 다음 ' + TYPE_NAME[type] + ' 날로' : ''}</div></td>
+        <td class="c-w">${wHtml(r)}</td><td class="c-r">${r.reps}×${r.sets}</td><td class="c-t">${esc(r.rest)}</td>${logged ? `<td class="c-s">${mark}</td>` : ''}</tr>`;
+      if (pl) h += `<tr class="plate"><td colspan="${logged ? 5 : 4}"><span class="pl">${pl.label}</span>${esc(pl.text)}</td></tr>`;
     }
     h += '</tbody></table>';
     if (unbalanced) h += `<div class="skipnote balance">${BALANCE_NOTE}</div>`;
+    if (waiting.length) h += `<div class="skipnote">이번 차례는 이미 해서 하체가 따라올 때까지 쉬어요: ${waiting.map((r) => esc(r.name)).join(', ')}</div>`;
     if (skipped.length) h += `<div class="skipnote">하체 4단계(가장 무거운 세션)라 상체·팔은 쉬어요: ${skipped.map((r) => esc(r.name)).join(', ')}</div>`;
     return h;
   }
@@ -221,7 +220,7 @@
       if (e.kind === 'gap') {
         const can = L.canLog(m.tl, d);
         html += `<section class="day quiet${isToday ? ' is-today' : ''}" id="d${d}"><div class="dayhead">${date}<div class="dayinfo"><div class="tagline">${todayTag}<span class="tag rest">휴식</span></div><div class="meta">세션 6번째 운동을 마친 다음 날이라 쉬어요</div></div></div>
-          ${can ? `<div class="dayfoot"><button class="btn ghost" type="button" data-act="log" data-day="${d}">이 날도 운동했다면 · 기록하기</button></div>` : ''}</section>`;
+          ${can ? `<div class="dayfoot"><button class="btn ghost" type="button" data-act="log" data-day="${d}">${isToday ? '오늘 운동한다면' : '이 날도 운동했다면'} · 기록하기</button><span class="hint">기록하면 운동한 날로 계산해요</span></div>` : ''}</section>`;
         continue;
       }
       if (e.kind === 'miss') {
@@ -230,57 +229,57 @@
           ${can ? `<div class="dayfoot"><button class="btn ghost" type="button" data-act="log" data-day="${d}">이 날 운동했어요 · 기록하기</button></div>` : ''}</section>`;
         continue;
       }
-      const slot = e.slot;
-      const type = L.slotType(slot);
-      const no = L.slotNo(m.cfg, slot);
-      const s = m.sess(no);
-      const rows = L.dayRows(m.cfg, s.presc, type);
+      const type = e.type;
       const isLog = e.kind === 'log';
-      const res = isLog ? m.log(slot).res : null;
-      const failed = isLog && Object.values(res).includes(false);
-      const projected = no > m.cur.no;
+      const ok = e.rows.filter((r) => r.avail === 'ok');
+      const failed = isLog && ok.some((r) => r.result === false);
+      const partial = isLog && ok.some((r) => r.result == null);
+      const projected = e.kind === 'plan' && e.no > m.cur.no;
       let tags = todayTag + `<span class="tag ${type}">${TYPE_NAME[type]}</span>`;
-      if (isLog) tags += failed ? '<span class="tag bad">일부 실패</span>' : '<span class="tag ok">완료</span>';
+      if (isLog) tags += failed ? '<span class="tag bad">일부 실패</span>' : partial ? '<span class="tag line">일부만 함</span>' : '<span class="tag ok">완료</span>';
       if (projected) tags += '<span class="tag line">예상</span>';
-      const meta = `세션 ${no} · ${L.slotPos(slot) + 1}/6 · ${stageText(s.presc.main)}`;
+      let meta = `세션 ${e.no} · ${e.pos + 1}/6 · ${stageText(e.main)}`;
+      if (isLog && e.rows[0].result == null) meta += ` · ${TYPE_NAME[type]}를 안 해서 다음 날도 ${TYPE_NAME[type]} 날`;
+      if (e.restSkipped) meta += ' · 지난 세션 중 2일 이상 쉬어서 정식 휴식 없이 이어가요';
       let foot = '';
       if (isLog) foot = `<button class="btn ghost" type="button" data-act="edit" data-day="${d}">결과 고치기</button>`;
-      else if (L.canLog(m.tl, d)) foot = `<button class="btn" type="button" data-act="log" data-day="${d}">운동 기록하기</button><span class="hint">끝나면 종목별 성공·실패를 체크해요</span>`;
+      else if (L.canLog(m.tl, d)) foot = `<button class="btn" type="button" data-act="log" data-day="${d}">운동 기록하기</button><span class="hint">끝나면 한 종목만 골라도 저장돼요</span>`;
       html += `<section class="day${isToday ? ' is-today' : ''}" id="d${d}"><div class="dayhead">${date}<div class="dayinfo"><div class="tagline">${tags}</div><div class="meta">${esc(meta)}</div></div></div>
-        <div class="daybody">${exTable(rows, res)}</div>${foot ? `<div class="dayfoot">${foot}</div>` : ''}</section>`;
+        <div class="daybody">${exTable(e.rows, isLog, type)}</div>${foot ? `<div class="dayfoot">${foot}</div>` : ''}</section>`;
     }
     $('days').innerHTML = html;
   }
 
   function renderPlan() {
     const base = model(L.mondayOf(L.toNum(today)) + 6);
-    const count = base.cur.no - base.first + 1 + 8;
-    const m = model(L.toNum(today), count * L.SLOTS);
-    const cfg = m.cfg;
+    const count = base.cur.i + 1 + 8;
+    const m = model(L.toNum(today), count);
+    const { sim, cfg } = m;
     let h = '<thead><tr><th>세션</th><th>하체 단계</th><th>데드리프트</th><th>스쿼트</th>';
     for (const a of cfg.acc) h += `<th class="wrap-h">${esc(a.name)}${a.sw ? ` → ${esc(a.sw.name)}` : ''}<br><span class="sdate">${a.day === 'D' ? '데드 날' : '스쿼트 날'}</span></th>`;
     h += '</tr></thead><tbody>';
     const mark = (v) => (v === true ? '<span class="res ok-t">✓</span>' : v === false ? '<span class="res bad-t">✗</span>' : '');
-    for (let no = m.first; no < m.first + count; no++) {
-      const s = m.sess(no);
-      const p = s.presc;
-      const out = s.out || null;
-      const isCur = no === m.cur.no;
-      const g0 = (no - m.first) * L.SLOTS;
-      const ds = m.tl.slotDate.slice(g0, g0 + L.SLOTS).filter((d) => d != null);
-      const dates = ds.length ? `${md(ds[0])}–${ds.length > 1 ? md(ds[ds.length - 1]) : ''}` : '';
-      const cls = [isCur ? 'cur' : no > m.cur.no ? 'proj' : '', p.main.stage === 1 && no > m.first ? 'bundle-start' : ''].join(' ');
-      h += `<tr class="${cls}"><td><div class="sno">${no}</div><div class="sdate">${isCur ? `진행 중 ${s.first + s.logs.length}/6` : dates}</div></td>`;
+    for (let i = 0; i < count && sim.main[i]; i++) {
+      const s = sim.main[i];
+      const p = sim.view(s.no);
+      const real = i < sim.real.main;
+      const isCur = i === sim.real.main;
+      const dates = s.firstDay == null ? '' : `${md(s.firstDay)}–${s.lastDay !== s.firstDay ? md(s.lastDay) : ''}`;
+      const cls = [isCur ? 'cur' : i > sim.real.main ? 'proj' : '', p.main.stage === 1 && i > 0 ? 'bundle-start' : ''].join(' ');
+      h += `<tr class="${cls}"><td><div class="sno">${s.no}</div><div class="sdate">${isCur ? `진행 중 ${m.cur.n}/6` : dates}</div></td>`;
       h += `<td class="stage">${esc(stageText(p.main))}${p.main.retry ? '<br>재도전' : ''}</td>`;
-      h += `<td><span class="w">${L.roundW(p.main.dl)}</span>${mark(out && out.main)}</td>`;
-      h += `<td><span class="w">${L.roundW(p.main.sq)}</span>${mark(out && out.main)}</td>`;
+      h += `<td><span class="w">${L.roundW(p.main.dl)}</span>${mark(real ? s.out : null)}</td>`;
+      h += `<td><span class="w">${L.roundW(p.main.sq)}</span>${mark(real ? s.out : null)}</td>`;
       for (const a of cfg.acc) {
         const q = p.acc[a.id];
-        if (q.off) { h += '<td></td>'; continue; }
+        if (q.off || q.pending) { h += '<td></td>'; continue; }
         if (q.skip) { h += '<td class="rest">휴식</td>'; continue; }
+        const ai = sim.real.acc[a.id];
+        const out = i < ai ? sim.acc[a.id][i].out : null;
+        const behind = i === ai && ai < sim.real.main ? '<span class="rp"> 밀림</span>' : '';
         const w = L.fmtW({ w: q.w, n: q.n, inc: q.inc, incV: q.incV }).replace('kg', '');
         const switched = a.sw && q.phase ? `<span class="rp"> ${esc(a.sw.name)}</span>` : '';
-        h += `<td><span class="w">${esc(w)}</span> <span class="rp">×${q.reps}</span>${mark(out && out.acc[a.id])}${switched}</td>`;
+        h += `<td><span class="w">${esc(w)}</span> <span class="rp">×${q.reps}</span>${mark(out)}${behind}${switched}</td>`;
       }
       h += '</tr>';
     }
@@ -291,8 +290,12 @@
   function openSheet(mode, day) {
     const li = mode === 'new' ? data.logs.length : data.logs.findIndex((l) => L.toNum(l.d) === day);
     if (li < 0) return;
-    const res = mode === 'edit' ? Object.assign({}, data.logs[li].res) : {};
-    sheet = { kind: 'log', mode, day, li, slot: L.startPoint(data.cfg).k + li, res, confirmDel: false, opener: document.activeElement };
+    const res = {};
+    if (mode === 'edit') {
+      const e = model(weekMon + 6).sim.days.get(day);
+      for (const r of e.rows) if (r.avail === 'ok' && r.result != null) res[r.id] = r.result;
+    }
+    sheet = { kind: 'log', mode, day, li, res, confirmDel: false, opener: document.activeElement };
     $('sheet').hidden = false;
     renderSheet(model(weekMon + 6));
     const first = $('panel').querySelector('button');
@@ -305,19 +308,20 @@
     $('panel').innerHTML = '';
     if (back && document.contains(back)) back.focus();
   }
-  function sheetRows(m) {
-    const type = L.slotType(sheet.slot);
-    const no = L.slotNo(m.cfg, sheet.slot);
-    return { type, no, s: m.sess(no), rows: L.dayRows(m.cfg, m.sess(no).presc, type).filter((r) => !r.skip) };
+  // 새 기록은 마지막 기록 다음 차례, 고치기는 그 날 기록 당시의 차례.
+  function sheetInfo(m) {
+    return sheet.mode === 'new' ? m.sim.next : m.sim.days.get(sheet.day);
   }
   function renderSheet(m) {
     if (sheet.kind === 'start') { renderStart(); return; }
-    const { type, no, s, rows } = sheetRows(m);
-    const allSet = rows.every((r) => r.id in sheet.res);
+    const info = sheetInfo(m);
+    const rows = info.rows.filter((r) => r.avail === 'ok');
+    const others = info.rows.filter((r) => r.avail !== 'ok');
+    const any = rows.some((r) => typeof sheet.res[r.id] === 'boolean');
     const isLast = sheet.mode === 'edit' && sheet.li === data.logs.length - 1;
-    let h = `<div><h2 id="sheetTitle">${longDate(sheet.day)} · ${TYPE_NAME[type]}</h2>
-      <div class="sub">세션 ${no} · ${L.slotPos(sheet.slot) + 1}/6 · ${esc(stageText(s.presc.main))}</div></div>
-      <p class="small">목표 횟수×세트를 모두 채웠으면 성공, 한 세트라도 못 채웠으면 실패예요. 실패한 종목은 다음 세션에 한 단계 낮춰서 다시 해요.</p>
+    let h = `<div><h2 id="sheetTitle">${longDate(sheet.day)} · ${TYPE_NAME[info.type]}</h2>
+      <div class="sub">세션 ${info.no} · ${info.pos + 1}/6 · ${esc(stageText(info.main))}</div></div>
+      <p class="small">목표 횟수×세트를 모두 채웠으면 성공, 한 세트라도 못 채웠으면 실패예요. <strong>하지 않은 종목은 비워 두세요.</strong> 다음 ${TYPE_NAME[info.type]} 날로 밀려요. 누른 버튼을 한 번 더 누르면 선택이 풀려요.</p>
       <div class="lrows">`;
     for (const r of rows) {
       const v = sheet.res[r.id];
@@ -329,8 +333,11 @@
           <button type="button" class="n" data-act="res" data-id="${esc(r.id)}" data-v="0" aria-pressed="${v === false}">실패</button>
         </div></div>`;
     }
-    h += `</div><div class="btnrow"><button class="btn ghost" type="button" data-act="allok">모두 성공</button></div>
-      <button class="btn block" type="button" data-act="saveLog" ${allSet ? '' : 'disabled'}>${sheet.mode === 'new' ? '기록 저장' : '고친 결과 저장'}</button>`;
+    h += '</div>';
+    if (others.length) h += `<p class="small">오늘은 쉬는 종목: ${others.map((r) => esc(r.name)).join(', ')}</p>`;
+    h += `<div class="btnrow"><button class="btn ghost" type="button" data-act="allok">모두 성공</button></div>
+      <button class="btn block" type="button" data-act="saveLog" ${any ? '' : 'disabled'}>${sheet.mode === 'new' ? '기록 저장' : '고친 결과 저장'}</button>`;
+    if (!any) h += '<p class="small">한 종목 이상 성공·실패를 고르면 저장할 수 있어요.</p>';
     if (isLast) {
       h += sheet.confirmDel
         ? `<div class="confirm"><span>이 날 기록을 지울까요? 계획이 다시 계산돼요.</span><button class="btn danger" type="button" data-act="delLog">지우기</button><button class="btn ghost" type="button" data-act="keepLog">취소</button></div>`
@@ -341,21 +348,23 @@
   }
   function saveLog() {
     const m = model(weekMon + 6);
-    const { rows } = sheetRows(m);
+    const info = sheetInfo(m);
     const res = {};
-    for (const r of rows) res[r.id] = sheet.res[r.id] !== false;
+    for (const r of info.rows) if (r.avail === 'ok' && typeof sheet.res[r.id] === 'boolean') res[r.id] = sheet.res[r.id];
+    if (!Object.keys(res).length) { toast('한 종목 이상 성공·실패를 골라 주세요'); return; }
+    const left = info.rows.filter((r) => r.avail === 'ok' && !(r.id in res)).length;
     if (sheet.mode === 'new') {
-      data.logs.push({ d: L.toStr(sheet.day), res });
-      const pos = L.slotPos(sheet.slot);
-      let msg = `${pos + 1}/6 기록했어요`;
-      if (pos === L.SLOTS - 1) {
-        const after = L.replay(data.cfg, data.logs);
-        const done = after[after.length - 2], next = after[after.length - 1];
-        msg = `세션 ${done.no} 완료${done.out.main ? '' : '(하체 실패)'} · 다음 세션 데드리프트 ${L.roundW(next.presc.main.dl)}kg`;
-      }
+      data.logs.push({ d: L.toStr(sheet.day), res, p: 1 });
+      const after = L.simulate(data.cfg, data.logs, today, { until: -Infinity });
+      let msg;
+      if (after.cur.no > m.cur.no) {
+        const done = after.main[after.cur.i - 1];
+        msg = `세션 ${done.no} 완료${done.out ? '' : '(하체 실패)'} · 다음 세션 데드리프트 ${L.roundW(after.cur.presc.dl)}kg`;
+      } else msg = info.rows[0].id in res ? `${after.cur.n}/6 기록했어요` : `기록했어요 · ${TYPE_NAME[info.type]}는 다음 날로 밀려요`;
+      if (left) msg += ` · 안 한 ${left}종목은 다음 ${TYPE_NAME[info.type]} 날로`;
       closeSheet(); commit(msg);
     } else {
-      data.logs[sheet.li].res = res;
+      data.logs[sheet.li] = { d: data.logs[sheet.li].d, res, p: 1 };
       closeSheet(); commit('결과를 고쳤어요. 이후 계획을 다시 계산했어요');
     }
   }
@@ -567,6 +576,10 @@
     h += `<div class="card"><h2>규칙</h2><ul class="rules">
       <li>한 세션은 운동 6회(데드리프트 날 → 스쿼트 날 번갈아 3회씩). 6번째 운동을 마친 다음 날 하루 쉬어요. 고정으로 쉬는 요일은 없어요.</li>
       <li>기록하지 않고 지나간 날은 쉰 날로 보고, 그날 운동을 다음 날로 미뤄요. 운동하고 깜빡했다면 그날을 눌러 나중에 기록할 수 있어요.</li>
+      <li>기록할 때 한 종목만 골라도 저장돼요. 고르지 않은 종목은 안 한 것으로 보고 다음 같은 날(데드 날·스쿼트 날)로 밀려요. 하체를 안 했으면 다음 날도 같은 하체 날이에요.</li>
+      <li>상체·팔은 자기 하체 날에만 하고 하체보다 앞서 가지 않아요. 밀린 종목은 지난 세션 몫부터 차례로 하고, 하체를 따라가느라 쉬는 날은 휴식으로 봐요.</li>
+      <li>한 세션(운동 6회)을 하는 동안 2일 이상 쉬었다면 세션 뒤 정식 휴식은 건너뛰어요.</li>
+      <li>휴식일에도 운동했다면 기록할 수 있고, 기록하면 운동한 날로 계산해요.</li>
       <li>이미 하던 루틴이면 시작 지점을 그 세션·순서·무게로 옮기고, 그 뒤 지난 날들을 날짜순으로 기록해 이어가요.</li>
       <li>데드리프트 = 스쿼트 × 1.2. 둘은 한 묶음으로 같이 오르내려요.</li>
       <li>하체는 세션마다 5%씩 올려 4단계까지 가고, 4단계를 성공하면 그 묶음의 2단계 무게로 내려 새 묶음을 시작해요.</li>
@@ -693,15 +706,20 @@
     else if (act === 'saveStart') saveStart();
     else if (act === 'edit') openSheet('edit', day);
     else if (act === 'close') closeSheet();
-    else if (act === 'res') { sheet.res[b.dataset.id] = b.dataset.v === '1'; renderSheet(model(weekMon + 6)); }
-    else if (act === 'allok') { for (const r of sheetRows(model(weekMon + 6)).rows) sheet.res[r.id] = true; renderSheet(model(weekMon + 6)); }
+    else if (act === 'res') {
+      const id = b.dataset.id, v = b.dataset.v === '1';
+      if (sheet.res[id] === v) delete sheet.res[id]; else sheet.res[id] = v;   // 다시 누르면 선택 해제
+      renderSheet(model(weekMon + 6));
+      const again = $('panel').querySelector(`[data-act="res"][data-id="${CSS.escape(id)}"][data-v="${b.dataset.v}"]`);
+      if (again) again.focus();
+    }
+    else if (act === 'allok') { for (const r of sheetInfo(model(weekMon + 6)).rows) if (r.avail === 'ok') sheet.res[r.id] = true; renderSheet(model(weekMon + 6)); }
     else if (act === 'saveLog') saveLog();
     else if (act === 'askDel') { sheet.confirmDel = true; renderSheet(model(weekMon + 6)); }
     else if (act === 'keepLog') { sheet.confirmDel = false; renderSheet(model(weekMon + 6)); }
     else if (act === 'delLog') { data.logs.pop(); closeSheet(); commit('기록을 지웠어요'); }
     else if (act === 'addAcc') {
-      const ss = L.replay(data.cfg, data.logs);
-      const no = ss[ss.length - 1].no;
+      const no = model(weekMon + 6).cur.no;
       data.cfg.acc.push({ id: 'x' + Date.now().toString(36), name: '새 종목', part: '', day: b.dataset.day, equip: 'dumbbell', w: 5, reps: 5, sets: 3, rest: '2분', inc: 'kg', incV: 1, light: false, from: no, sw: null });
       commit(`세션 ${no}부터 들어가요`); renderSettings();
     } else if (act === 'delAcc') {
