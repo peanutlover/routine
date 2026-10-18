@@ -227,6 +227,15 @@ main.wrap { padding-block: 14px 120px; display: grid; gap: 14px; }
 .field textarea { min-height: 96px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+/* 격자 안의 칸·입력칸이 내용 폭(Safari의 입력칸 기본 폭) 때문에 카드 밖으로 밀려나지 않게 */
+.card > *, .acc > *, .swbox > *, .strow > *, .row2 > *, .row3 > *, .field > * { min-width: 0; }
+.field input, .field select, .field textarea { max-width: 100%; }
+.field input, .field select { min-height: 40px; margin: 0; }
+@media (max-width: 420px) { .row2.pair { grid-template-columns: minmax(0, 1fr); } }
+/* 아이폰은 16px보다 작은 입력칸을 누르면 화면을 확대해 칸이 밖으로 나간 것처럼 보인다 */
+@media (pointer: coarse) { input, select, textarea { font-size: 16px; } }
+.field input[type="date"] { -webkit-appearance: none; appearance: none; display: block; min-height: 40px; text-align: left; }
+.field input::-webkit-date-and-time-value { text-align: left; }
 .plates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .plates label { display: grid; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--ground); }
 .plates label.on { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
@@ -1640,7 +1649,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
         <div class="row3"><label class="field"><span>부위</span><input type="text" id="acc-${esc(a.id)}-part" data-k="acc.${i}.part" value="${esc(a.part)}"></label>
         <label class="field"><span>${wl} (kg)</span><input type="number" inputmode="decimal" step="0.1" min="0" id="acc-${esc(a.id)}-w" data-k="acc.${i}.w" value="${a.w == null ? '' : a.w}" placeholder="생략"></label>
         <label class="field"><span>1단계 횟수</span><input type="number" inputmode="numeric" min="1" id="acc-${esc(a.id)}-reps" data-k="acc.${i}.reps" value="${a.reps}"></label></div>
-        <div class="row2"><div class="row2"><label class="field"><span>세트</span><input type="number" inputmode="numeric" min="1" id="acc-${esc(a.id)}-sets" data-k="acc.${i}.sets" value="${a.sets}"></label>
+        <div class="row2 pair"><div class="row2"><label class="field"><span>세트</span><input type="number" inputmode="numeric" min="1" id="acc-${esc(a.id)}-sets" data-k="acc.${i}.sets" value="${a.sets}"></label>
         <label class="field"><span>휴식</span><input type="text" id="acc-${esc(a.id)}-rest" data-k="acc.${i}.rest" value="${esc(a.rest)}"></label></div>
         <div class="row2"><label class="field"><span>증량 방식</span><select id="acc-${esc(a.id)}-inc" data-k="acc.${i}.inc"><option value="pct" ${a.inc === 'pct' ? 'selected' : ''}>%</option><option value="kg" ${a.inc === 'kg' ? 'selected' : ''}>kg</option></select></label>
         <label class="field"><span>증량 값</span><input type="number" inputmode="decimal" step="0.5" min="0" id="acc-${esc(a.id)}-incv" data-k="acc.${i}.incV" value="${a.incV}"></label></div></div>

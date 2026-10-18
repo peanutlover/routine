@@ -734,7 +734,7 @@
         <div class="row3"><label class="field"><span>부위</span><input type="text" id="acc-${esc(a.id)}-part" data-k="acc.${i}.part" value="${esc(a.part)}"></label>
         <label class="field"><span>${wl} (kg)</span><input type="number" inputmode="decimal" step="0.1" min="0" id="acc-${esc(a.id)}-w" data-k="acc.${i}.w" value="${a.w == null ? '' : a.w}" placeholder="생략"></label>
         <label class="field"><span>1단계 횟수</span><input type="number" inputmode="numeric" min="1" id="acc-${esc(a.id)}-reps" data-k="acc.${i}.reps" value="${a.reps}"></label></div>
-        <div class="row2"><div class="row2"><label class="field"><span>세트</span><input type="number" inputmode="numeric" min="1" id="acc-${esc(a.id)}-sets" data-k="acc.${i}.sets" value="${a.sets}"></label>
+        <div class="row2 pair"><div class="row2"><label class="field"><span>세트</span><input type="number" inputmode="numeric" min="1" id="acc-${esc(a.id)}-sets" data-k="acc.${i}.sets" value="${a.sets}"></label>
         <label class="field"><span>휴식</span><input type="text" id="acc-${esc(a.id)}-rest" data-k="acc.${i}.rest" value="${esc(a.rest)}"></label></div>
         <div class="row2"><label class="field"><span>증량 방식</span><select id="acc-${esc(a.id)}-inc" data-k="acc.${i}.inc"><option value="pct" ${a.inc === 'pct' ? 'selected' : ''}>%</option><option value="kg" ${a.inc === 'kg' ? 'selected' : ''}>kg</option></select></label>
         <label class="field"><span>증량 값</span><input type="number" inputmode="decimal" step="0.5" min="0" id="acc-${esc(a.id)}-incv" data-k="acc.${i}.incV" value="${a.incV}"></label></div></div>
