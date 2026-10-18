@@ -148,6 +148,7 @@
     renderHeader(m);
     if (tab === 'week') renderWeek(m);
     if (tab === 'plan') renderPlan();
+    if (tab === 'chart') renderChart();
     if (tab === 'settings' && !$('view-settings').childElementCount) renderSettings();
     $('welcome').hidden = data.started || tab !== 'week';
     if (sheet) renderSheet(m);
@@ -285,6 +286,182 @@
     }
     $('planTable').innerHTML = h + '</tbody>';
   }
+
+  // ---------- 기록 그래프 ----------
+  // 실제로 한 기록(성공·실패)만 그린다. 색은 종목에 고정(하체 → 설정의 보조 종목 순서)이라 숨기거나 늘어도 바뀌지 않는다.
+  // 한눈에: 종목마다 무게·증량 폭이 달라 y축 크기는 버리고, 종목마다 처음 기록을 맨 아래·가장 많이 오른 때를 맨 위로 맞춰 겹쳐 그린다.
+  //         오른 정도는 첫 기록 대비 누적 증량 %로 재고, 덤벨→바벨처럼 종목이 바뀌면 그 전 증량을 이어 받는다.
+  let chartMode = 'all';
+  const chartOff = new Set();
+  const PALETTE = 8;
+  function chartData() {
+    const cfg = data.cfg;
+    const slot = new Map([['main', 1]]);
+    cfg.acc.forEach((a, i) => slot.set(a.id, i + 2 <= PALETTE ? i + 2 : 0));
+    const color = (ent) => `var(--c${slot.get(ent) || 0})`;
+    const sim = model(L.toNum(today)).sim;
+    const each = new Map(), all = new Map(), recs = [];
+    const logged = [...sim.days.entries()].filter(([, e]) => e.kind === 'log').sort((a, b) => a[0] - b[0]);
+    for (const [d, e] of logged) {
+      for (const r of e.rows) {
+        if (r.result == null) continue;
+        const ent = r.main ? 'main' : r.id;
+        const key = r.main ? r.id : r.id + (r.phase ? '.b' : '');
+        const rel = r.w == null;
+        const y = rel ? (r.inc === 'kg' ? r.n * r.incV : (Math.pow(1 + r.incV / 100, r.n) - 1) * 100) : L.roundW(r.w);
+        const text = `${L.fmtW(r)} × ${r.reps}회 × ${r.sets}세트 · ${r.result ? '성공' : '실패'}`;
+        recs.push({ d, name: r.name, text });
+        if (!each.has(key)) each.set(key, { key, ent, name: r.name, color: color(ent), unit: rel ? (r.inc === 'kg' ? '+kg' : '+%') : 'kg', pts: [] });
+        each.get(key).pts.push({ x: d, y, ok: r.result, text });
+        if (rel || !slot.get(ent)) continue;
+        const w = r.main ? e.main.dl : r.w;
+        const phase = r.phase || 0;
+        let s = all.get(ent);
+        if (!s) {
+          const a = cfg.acc.find((x) => x.id === ent);
+          s = { key: ent, name: r.main ? '데드리프트·스쿼트' : a.sw ? `${a.name}→${a.sw.name}` : a.name, color: color(ent), slot: slot.get(ent), pts: [], g: 1, prev: w, phase };
+          all.set(ent, s);
+        } else {
+          if (phase === s.phase) s.g *= w / s.prev;
+          s.prev = w; s.phase = phase;
+        }
+        const pct = Math.round((s.g - 1) * 100);
+        s.pts.push({ x: d, g: s.g, ok: r.result, v: `${pct > 0 ? '+' : ''}${pct}%`, text: `${r.main ? `데드 ${L.roundW(e.main.dl)}kg` : L.fmtW(r)} · ${r.result ? '성공' : '실패'}` });
+      }
+    }
+    for (const s of all.values()) {
+      const top = Math.max(...s.pts.map((p) => p.g));
+      for (const p of s.pts) p.y = top > 1 + 1e-9 ? (p.g - 1) / (top - 1) : 0;
+    }
+    const order = (x) => (x.key === 'dl' ? 0 : x.key === 'sq' ? 1 : (slot.get(x.ent) || 99) * 2 + (x.key.endsWith('.b') ? 1 : 0));
+    return { each: [...each.values()].sort((a, b) => order(a) - order(b)), all: [...all.values()].sort((a, b) => a.slot - b.slot), recs };
+  }
+  function niceTicks(lo, hi, n) {
+    const raw = (hi - lo) / Math.max(1, n);
+    const p = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((k) => k * p).find((k) => k >= raw) || 10 * p;
+    const out = [];
+    for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(Number(v.toFixed(6)));
+    return out;
+  }
+  // 그래프 자리. 그린 뒤 drawPlot으로 채운다 (폭을 알아야 해서). fmt: kg · pct(누적 %) · rel(무게 생략 종목의 +kg). labels: 선 끝에 이름.
+  function plotHtml({ h, fmt, labels }) {
+    return `<div class="plot" data-h="${h}" data-labels="${labels ? 1 : 0}" data-fmt="${fmt}"></div>`;
+  }
+  // series: [{key, name, color, pts:[{x(일 번호), y, ok, text}]}]
+  function drawPlot(el, series) {
+    const W = Math.max(240, el.clientWidth), H = Number(el.dataset.h);
+    const norm = el.dataset.fmt === 'norm';
+    const fmt = el.dataset.fmt === 'rel' ? (v) => `+${Number(v.toFixed(1))}` : (v) => `${Number(v.toFixed(1))}`;
+    const labels = el.dataset.labels === '1' && series.length <= 4;
+    const xs = [...new Set(series.flatMap((s) => s.pts.map((p) => p.x)))].sort((a, b) => a - b);
+    const ys = series.flatMap((s) => s.pts.map((p) => p.y));
+    if (!xs.length) { el.innerHTML = ''; return; }
+    let x0 = xs[0], x1 = xs[xs.length - 1];
+    if (x0 === x1) { x0 -= 1; x1 += 1; }
+    let y0 = Math.min(...ys), y1 = Math.max(...ys);
+    if (norm) { y0 = 0; y1 = 1; }
+    if (y0 === y1) { y0 -= 1; y1 += 1; }
+    const pad = (y1 - y0) * 0.08; y0 -= pad; y1 += pad;
+    const ticks = norm ? [0, 1] : niceTicks(y0, y1, 3);
+    const tickText = (t) => (norm ? (t ? '최고' : '처음') : fmt(t));
+    const ml = 8 + Math.max(...ticks.map((t) => tickText(t).length * (norm ? 12 : 6.5))), mr = labels ? 92 : 10, mt = 10, mb = 22;
+    const sx = (x) => ml + ((x - x0) / (x1 - x0)) * (W - ml - mr);
+    const sy = (y) => mt + (1 - (y - y0) / (y1 - y0)) * (H - mt - mb);
+    let g = '';
+    for (const t of ticks) g += `<line class="grid" x1="${ml}" x2="${W - mr}" y1="${sy(t)}" y2="${sy(t)}"/><text class="axis" x="${ml - 6}" y="${sy(t) + 4}" text-anchor="end">${esc(tickText(t))}</text>`;
+    const xt = xs.length <= 4 ? xs : [xs[0], xs[Math.round((xs.length - 1) / 3)], xs[Math.round((2 * (xs.length - 1)) / 3)], xs[xs.length - 1]];
+    for (const x of [...new Set(xt)]) g += `<text class="axis" x="${sx(x)}" y="${H - 6}" text-anchor="middle">${md(x)}</text>`;
+    for (const s of series) {
+      if (s.pts.length > 1) g += `<path d="${s.pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join('')}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+      // 점이 빽빽하면 실패한 날과 마지막 기록만 점으로 찍는다.
+      const dense = s.pts.length * 10 > W - ml - mr;
+      for (const [i, p] of s.pts.entries()) if (!dense || !p.ok || i === s.pts.length - 1) g += `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="4" fill="${p.ok ? s.color : 'var(--surface)'}" stroke="${p.ok ? 'var(--surface)' : s.color}" stroke-width="2"/>`;
+    }
+    if (labels) {
+      const ends = series.map((s) => ({ s, y: sy(s.pts[s.pts.length - 1].y) })).sort((a, b) => a.y - b.y);
+      for (let i = 1; i < ends.length; i++) ends[i].y = Math.max(ends[i].y, ends[i - 1].y + 13);
+      for (const e of ends) g += `<text class="dlabel" x="${W - mr + 8}" y="${e.y + 4}">${esc(e.s.name.length > 9 ? e.s.name.slice(0, 8) + '…' : e.s.name)}</text>`;
+    }
+    g += `<line class="cross" x1="0" x2="0" y1="${mt}" y2="${H - mb}" visibility="hidden"/>`;
+    const name = series.length === 1 ? series[0].name : '여러 종목';
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" height="${H}" tabindex="0" role="img" aria-label="${esc(name)} 날짜별 기록 그래프. 화살표 키로 날짜를 옮겨 값을 볼 수 있어요">${g}</svg><div class="tip" hidden></div>`;
+    const svg = el.querySelector('svg'), tip = el.querySelector('.tip'), cross = el.querySelector('.cross');
+    let cur = -1;
+    const show = (i) => {
+      cur = Math.max(0, Math.min(xs.length - 1, i));
+      const x = xs[cur], px = sx(x);
+      cross.setAttribute('x1', px); cross.setAttribute('x2', px); cross.setAttribute('visibility', 'visible');
+      tip.replaceChildren();
+      const head = document.createElement('div'); head.className = 'td'; head.textContent = longDate(x); tip.append(head);
+      for (const s of series) {
+        // 그 날 기록이 없는 종목은 그때까지의 마지막 기록을 보여준다.
+        const p = s.pts.filter((q) => q.x <= x).pop();
+        if (!p) continue;
+        const row = document.createElement('div'); row.className = 'tr';
+        const key = document.createElement('i'); key.style.background = s.color;
+        const box = document.createElement('div');
+        const b = document.createElement('b'); b.textContent = p.v || fmt(p.y) + (el.dataset.fmt === 'kg' ? 'kg' : '');
+        const sm = document.createElement('span'); sm.textContent = ` ${series.length > 1 ? s.name + ' · ' : ''}${p.text}${p.x < x ? ` (${md(p.x)})` : ''}`;
+        box.append(b, sm); row.append(key, box); tip.append(row);
+      }
+      tip.hidden = false;
+      const tw = tip.offsetWidth;
+      tip.style.left = `${Math.min(Math.max(0, px + 12 + tw > W ? px - tw - 12 : px + 12), Math.max(0, W - tw))}px`;
+    };
+    const hide = () => { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); };
+    const near = (ev) => {
+      const r = svg.getBoundingClientRect();
+      const px = ((ev.clientX - r.left) / r.width) * W;
+      let best = 0;
+      xs.forEach((x, i) => { if (Math.abs(sx(x) - px) < Math.abs(sx(xs[best]) - px)) best = i; });
+      show(best);
+    };
+    svg.addEventListener('pointermove', near);
+    svg.addEventListener('pointerdown', near);
+    svg.addEventListener('pointerleave', (ev) => { if (ev.pointerType === 'mouse') hide(); });
+    svg.addEventListener('blur', hide);
+    svg.addEventListener('keydown', (ev) => {
+      if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') { ev.preventDefault(); show(cur < 0 ? xs.length - 1 : cur + (ev.key === 'ArrowRight' ? 1 : -1)); }
+      else if (ev.key === 'Escape') hide();
+    });
+    svg.addEventListener('focus', () => show(cur < 0 ? xs.length - 1 : cur));
+  }
+  let chartSeries = [];
+  function renderChart() {
+    const view = $('view-chart');
+    const { each, all, recs } = chartData();
+    if (!recs.length) {
+      view.innerHTML = '<div class="notice"><p><strong>아직 기록이 없어요.</strong> 운동을 기록하면 종목별 무게 변화가 날짜별 그래프로 나와요.</p></div>';
+      return;
+    }
+    const seg = (v, t) => `<button type="button" data-act="chartMode" data-v="${v}" aria-pressed="${chartMode === v}">${t}</button>`;
+    let h = `<div class="chartbar"><div class="seg" role="group" aria-label="그래프 보기">${seg('all', '한눈에')}${seg('each', '종목별')}</div>
+      <span class="small">속 빈 점 = 실패한 날</span></div>`;
+    if (chartMode === 'all') {
+      const shown = all.filter((s) => !chartOff.has(s.key));
+      chartSeries = [shown];
+      h += `<div class="chartcard"><div class="charthead"><h2>모든 종목 증량 추이</h2><span class="from">높이 = 종목마다 처음 → 최고</span></div>
+        <p class="small">종목마다 무게와 증량 폭이 달라 y축 크기는 맞추지 않았어요. 처음 기록을 맨 아래, 가장 많이 오른 때를 맨 위로 맞춰 겹쳤어요. 실제로 몇 % 올랐는지는 그래프를 누르면 보여요. 하체는 데드리프트와 스쿼트가 같이 오르내려 한 줄이고, 무게 생략 종목은 종목별 보기에 있어요.</p>
+        <div class="legend2" role="group" aria-label="종목 보이기·숨기기">${all.map((s) => `<button type="button" data-act="chartToggle" data-key="${esc(s.key)}" aria-pressed="${!chartOff.has(s.key)}"><i style="background:${s.color}"></i>${esc(s.name)}</button>`).join('')}</div>
+        ${shown.length ? plotHtml({ h: 280, fmt: 'norm', labels: true }) : '<p class="small">보일 종목을 위에서 골라 주세요.</p>'}</div>`;
+    } else {
+      chartSeries = each.map((s) => [s]);
+      h += '<div class="charts">';
+      for (const s of each) {
+        const first = s.pts[0], last = s.pts[s.pts.length - 1];
+        const val = (v) => (s.unit === 'kg' ? `${Number(v.toFixed(1))}kg` : s.unit === '+kg' ? `+${Number(v.toFixed(1))}kg` : `+${Math.round(v)}%`);
+        h += `<div class="chartcard"><div class="charthead"><h2>${esc(s.name)}</h2><span><span class="now">${esc(val(last.y))}</span> <span class="from">처음 ${esc(val(first.y))} · ${s.pts.length}회</span></span></div>
+          ${plotHtml({ h: 150, fmt: s.unit === 'kg' ? 'kg' : 'rel', labels: false })}</div>`;
+      }
+      h += '</div>';
+    }
+    h += `<details class="recs chartcard"><summary>표로 보기 · 기록 ${recs.length}개</summary><table class="rectable"><thead><tr><th>날짜</th><th>종목</th><th>기록</th></tr></thead><tbody>${recs.slice().reverse().map((r) => `<tr><td>${md(r.d)}</td><td>${esc(r.name)}</td><td>${esc(r.text)}</td></tr>`).join('')}</tbody></table></details>`;
+    view.innerHTML = h;
+    view.querySelectorAll('.plot').forEach((el, i) => drawPlot(el, chartSeries[i]));
+  }
+  let chartResize = 0;
+  window.addEventListener('resize', () => { clearTimeout(chartResize); chartResize = setTimeout(() => { if (tab === 'chart') renderChart(); }, 150); });
 
   // ---------- 기록 시트 ----------
   function openSheet(mode, day) {
@@ -682,7 +859,7 @@
 
   function setTab(next) {
     tab = next;
-    for (const name of ['week', 'plan', 'settings']) {
+    for (const name of ['week', 'plan', 'chart', 'settings']) {
       $('view-' + name).hidden = name !== tab;
       $('tab-' + name).setAttribute('aria-selected', String(name === tab));
     }
@@ -715,6 +892,8 @@
     }
     else if (act === 'allok') { for (const r of sheetInfo(model(weekMon + 6)).rows) if (r.avail === 'ok') sheet.res[r.id] = true; renderSheet(model(weekMon + 6)); }
     else if (act === 'saveLog') saveLog();
+    else if (act === 'chartMode') { chartMode = b.dataset.v === 'each' ? 'each' : 'all'; renderChart(); }
+    else if (act === 'chartToggle') { const k = b.dataset.key; if (chartOff.has(k)) chartOff.delete(k); else chartOff.add(k); renderChart(); }
     else if (act === 'askDel') { sheet.confirmDel = true; renderSheet(model(weekMon + 6)); }
     else if (act === 'keepLog') { sheet.confirmDel = false; renderSheet(model(weekMon + 6)); }
     else if (act === 'delLog') { data.logs.pop(); closeSheet(); commit('기록을 지웠어요'); }
