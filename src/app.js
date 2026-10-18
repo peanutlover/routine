@@ -37,6 +37,7 @@
       cv: c.cv,
       startDate: /^\d{4}-\d{2}-\d{2}$/.test(c.startDate) ? c.startDate : today,
       from: sanitizeFrom(c.from),
+      restSec: sanitizeRest(c.restSec),
       plates: Array.isArray(c.plates) ? [...L.plateCounts(c.plates)].flatMap(([p, n]) => Array(Math.min(n, PAIR_MAX)).fill(p)).sort((a, b) => a - b) : base.plates,
       main: Object.assign({}, base.main, c.main || {}),
       acc: Array.isArray(c.acc)
@@ -54,6 +55,12 @@
       .map((l) => Object.assign({ d: l.d, res: l.res && typeof l.res === 'object' ? l.res : {} }, l.p ? { p: 1 } : {}))
       .sort((a, b) => (a.d < b.d ? -1 : 1));
     return { v: 1, updatedAt: +x.updatedAt || 0, started: !!x.started || logs.length > 0, cfg, logs };
+  }
+  // 종목별 휴식 타이머 시간(초). 타이머에서 처음 정하면 저장된다.
+  function sanitizeRest(r) {
+    const out = {};
+    if (r && typeof r === 'object') for (const [id, v] of Object.entries(r)) { const n = Math.round(Number(v)); if (n >= 5 && n <= 3600) out[id] = n; }
+    return out;
   }
   // 시작 지점: 적힌 값만 남긴다 (빠진 상체 단계는 하체 단계에 맞춘 기본값을 쓴다).
   function sanitizeFrom(f) {
@@ -221,7 +228,7 @@
       if (e.kind === 'gap') {
         const can = L.canLog(m.tl, d);
         html += `<section class="day quiet${isToday ? ' is-today' : ''}" id="d${d}"><div class="dayhead">${date}<div class="dayinfo"><div class="tagline">${todayTag}<span class="tag rest">휴식</span></div><div class="meta">세션 6번째 운동을 마친 다음 날이라 쉬어요</div></div></div>
-          ${can ? `<div class="dayfoot"><button class="btn ghost" type="button" data-act="log" data-day="${d}">${isToday ? '오늘 운동한다면' : '이 날도 운동했다면'} · 기록하기</button><span class="hint">기록하면 운동한 날로 계산해요</span></div>` : ''}</section>`;
+          ${can ? `<div class="dayfoot">${isToday ? timerButton() : ''}<button class="btn ghost" type="button" data-act="log" data-day="${d}">${isToday ? '오늘 운동한다면' : '이 날도 운동했다면'} · 기록하기</button><span class="hint">기록하면 운동한 날로 계산해요</span></div>` : ''}</section>`;
         continue;
       }
       if (e.kind === 'miss') {
@@ -245,6 +252,7 @@
       let foot = '';
       if (isLog) foot = `<button class="btn ghost" type="button" data-act="edit" data-day="${d}">결과 고치기</button>`;
       else if (L.canLog(m.tl, d)) foot = `<button class="btn" type="button" data-act="log" data-day="${d}">운동 기록하기</button><span class="hint">끝나면 한 종목만 골라도 저장돼요</span>`;
+      if (isToday) foot = timerButton() + foot;
       html += `<section class="day${isToday ? ' is-today' : ''}" id="d${d}"><div class="dayhead">${date}<div class="dayinfo"><div class="tagline">${tags}</div><div class="meta">${esc(meta)}</div></div></div>
         <div class="daybody">${exTable(e.rows, isLog, type)}</div>${foot ? `<div class="dayfoot">${foot}</div>` : ''}</section>`;
     }
@@ -463,6 +471,178 @@
   let chartResize = 0;
   window.addEventListener('resize', () => { clearTimeout(chartResize); chartResize = setTimeout(() => { if (tab === 'chart') renderChart(); }, 150); });
 
+  // ---------- 휴식 타이머 ----------
+  // 오늘 할 종목마다 따로 쓰는 휴식 타이머. 순서는 자유. 세트를 마치면 그 종목의 휴식 시작을 누르고,
+  // 휴식이 "세트 수 − 1"번 끝나면 그 종목은 완료. 끝나는 시각을 저장해 화면이 꺼졌다 켜져도 남은 시간이 맞는다.
+  // 진행 상태는 이 기기에만(그날 하루), 종목별 휴식 시간은 설정(data.cfg.restSec)에 저장한다.
+  const TKEY = 'routine5.timer';
+  let timer = loadTimer();
+  let tickId = 0, audio = null, wake = null;
+  function loadTimer() {
+    try { const t = JSON.parse(localStorage.getItem(TKEY)); if (t && t.day === today && t.items) return t; } catch (e) { /* 저장소 없음 */ }
+    return { day: today, items: {} };
+  }
+  function saveTimer() { try { localStorage.setItem(TKEY, JSON.stringify(timer)); } catch (e) { /* 저장소 없음 */ } }
+  function tState(id) {
+    if (timer.day !== today) timer = { day: today, items: {} };
+    return timer.items[id] || (timer.items[id] = { n: 0, endAt: 0, dur: 0 });
+  }
+  const restNeed = (r) => Math.max(1, r.sets - 1);
+  const clock = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+  // 설정의 휴식 글("3~5분", "90초")에서 처음 보여 줄 시간을 고른다 (짧은 쪽).
+  function defaultRest(text) {
+    const m = /(\d+(?:\.\d+)?)\s*(?:[~\-]\s*\d+(?:\.\d+)?)?\s*(분|초)?/.exec(text || '');
+    if (!m) return 120;
+    const v = parseFloat(m[1]);
+    return Math.max(15, Math.round((m[2] === '초' ? v : v * 60) / 15) * 15);
+  }
+  const restSec = (id) => (data.cfg.restSec || {})[id];
+  // 오늘 할 종목: 오늘 카드(예정·기록)의 종목, 오늘이 휴식일이면 기록할 수 있는 다음 차례.
+  function timerInfo(m) {
+    const T = L.toNum(today);
+    const e = m.sim.days.get(T);
+    const info = e && (e.kind === 'plan' || e.kind === 'log') ? e : L.canLog(m.sim, T) ? m.sim.next : null;
+    return info ? { info, rows: info.rows.filter((r) => r.avail === 'ok') } : null;
+  }
+  const running = () => Object.values(timer.items).some((t) => t.endAt > Date.now());
+  function timerButton() {
+    return `<button class="btn ghost" type="button" data-act="timer">${running() ? '휴식 타이머 · 진행 중' : '휴식 타이머'}</button>`;
+  }
+  function openTimer() {
+    sheet = { kind: 'timer', editing: null, opener: document.activeElement };
+    $('sheet').hidden = false;
+    renderTimer(model(weekMon + 6));
+    const first = $('panel').querySelector('button, select');
+    if (first) first.focus();
+  }
+  function renderTimer(m) {
+    const t = timerInfo(m);
+    let h = '<div><h2 id="sheetTitle">휴식 타이머</h2>';
+    if (!t) {
+      h += `<div class="sub">${longDate(L.toNum(today))}</div></div><p class="small">오늘은 할 운동이 없어요.</p><button class="btn ghost" type="button" data-act="close">닫기</button>`;
+      $('panel').innerHTML = h;
+      return;
+    }
+    const { info, rows } = t;
+    const now = Date.now();
+    const doneCount = rows.filter((r) => tState(r.id).n >= restNeed(r)).length;
+    h += `<div class="sub">${longDate(L.toNum(today))} · ${TYPE_NAME[info.type]} 날 · 완료 ${doneCount}/${rows.length}종목</div></div>
+      <p class="small">세트를 마치면 그 종목의 <strong>휴식 시작</strong>을 눌러요. 종목 순서는 자유예요. 휴식이 세트 수보다 한 번 적게 끝나면(3세트면 2번) 그 종목은 완료예요.</p><div class="tmrs">`;
+    for (const r of rows) {
+      const st = tState(r.id);
+      const need = restNeed(r);
+      const sec = restSec(r.id);
+      const run = st.endAt > now;
+      const done = !run && st.n >= need;
+      const editing = sec == null || sheet.editing === r.id;
+      const setNo = Math.min(r.sets, st.n + 1);
+      let dots = '';
+      for (let i = 0; i < r.sets; i++) dots += `<i class="${i < st.n + (done ? 1 : 0) ? 'on' : ''}"></i>`;
+      h += `<section class="tmr${run ? ' run' : ''}${done ? ' done' : ''}" aria-label="${esc(r.name)}">
+        <div class="tmhead"><div><div class="nm">${esc(r.name)}</div><div class="rx"><b>${wHtml(r)}</b> · ${r.reps}회 × ${r.sets}세트</div></div>
+          <div class="tmset"><span class="dots" aria-hidden="true">${dots}</span><span>${done ? '완료' : run ? `${st.n + 1}세트 끝 · 휴식 중` : `${setNo}세트째`}</span></div></div>`;
+      if (editing) {
+        const cur = sec == null ? defaultRest(r.rest) : sec;
+        const mins = Array.from({ length: 11 }, (_, i) => `<option value="${i}" ${i === Math.floor(cur / 60) ? 'selected' : ''}>${i}분</option>`).join('');
+        const secs = [0, 15, 30, 45].map((v) => `<option value="${v}" ${v === cur % 60 ? 'selected' : ''}>${v}초</option>`).join('');
+        h += `<div class="tmedit"><span class="small">${sec == null ? `휴식 시간을 정해 주세요${r.rest ? ` (설정: ${esc(r.rest)})` : ''}` : '휴식 시간 바꾸기'}</span>
+          <div class="tmpick"><select id="tm-m-${esc(r.id)}" aria-label="분">${mins}</select><select id="tm-s-${esc(r.id)}" aria-label="초">${secs}</select>
+          <button class="btn" type="button" data-act="tSave" data-id="${esc(r.id)}">저장</button></div></div>`;
+      } else if (run) {
+        const left = Math.max(0, (st.endAt - now) / 1000);
+        h += `<div class="tmclock num" id="tc-${esc(r.id)}" role="timer" aria-live="off">${clock(Math.ceil(left))}</div>
+          <div class="tmbar"><span id="tb-${esc(r.id)}" style="width:${(100 * (1 - left / st.dur)).toFixed(1)}%"></span></div>
+          <div class="btnrow"><button class="btn ghost" type="button" data-act="tSkip" data-id="${esc(r.id)}">휴식 끝내기</button></div>`;
+      } else if (done) {
+        h += `<div class="tmdone"><span class="ok-t">✓ ${r.sets}세트 완료</span><button class="btn ghost" type="button" data-act="tReset" data-id="${esc(r.id)}">처음부터</button></div>`;
+      } else {
+        const last = r.sets <= 1;
+        h += `<button class="btn block tmgo" type="button" data-act="tStart" data-id="${esc(r.id)}">${last ? '세트 완료로 표시' : `${st.n + 1}세트 끝 · 휴식 시작 ${clock(sec)}`}</button>
+          <div class="tmmore"><button class="linkbtn" type="button" data-act="tEdit" data-id="${esc(r.id)}">휴식 ${clock(sec)} 바꾸기</button>${st.n ? `<button class="linkbtn" type="button" data-act="tUndo" data-id="${esc(r.id)}">한 세트 되돌리기</button>` : ''}</div>`;
+      }
+      h += '</section>';
+    }
+    h += '</div><button class="btn ghost" type="button" data-act="close">닫기 · 타이머는 계속 돌아요</button>';
+    const panel = $('panel');
+    const top = panel.scrollTop;
+    panel.innerHTML = h;
+    panel.scrollTop = top;
+  }
+  function beep() {
+    try {
+      if (!audio) return;
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.frequency.value = 880; o.connect(g); g.connect(audio.destination);
+      const t0 = audio.currentTime;
+      g.gain.setValueAtTime(0.0001, t0);
+      for (let i = 0; i < 3; i++) { g.gain.exponentialRampToValueAtTime(0.4, t0 + i * 0.35 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.35 + 0.25); }
+      o.start(t0); o.stop(t0 + 1.1);
+    } catch (e) { /* 소리를 못 내는 환경 */ }
+    try { if (navigator.vibrate) navigator.vibrate([250, 120, 250]); } catch (e) { /* 진동 없음 */ }
+  }
+  async function keepAwake(on) {
+    try {
+      if (on && !wake && navigator.wakeLock) { wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); }
+      else if (!on && wake) { await wake.release(); wake = null; }
+    } catch (e) { wake = null; }
+  }
+  // 끝난 휴식을 세고, 열린 타이머 화면의 시계만 갱신한다.
+  function tick() {
+    const now = Date.now();
+    let finished = null;
+    for (const [id, st] of Object.entries(timer.items)) {
+      if (st.endAt && st.endAt <= now) { st.endAt = 0; st.n += 1; finished = id; }
+    }
+    if (finished) {
+      saveTimer();
+      beep();
+      const m = model(weekMon + 6), t = timerInfo(m);
+      const r = t && t.rows.find((x) => x.id === finished);
+      if (r) toast(tState(r.id).n >= restNeed(r) ? `${r.name} 휴식 끝 · 마지막 세트 하고 완료예요` : `${r.name} 휴식 끝 · ${tState(r.id).n + 1}세트 시작`);
+      if (sheet && sheet.kind === 'timer') renderTimer(m);
+      if (tab === 'week') renderWeek(m);
+    } else if (sheet && sheet.kind === 'timer') {
+      for (const [id, st] of Object.entries(timer.items)) {
+        if (!(st.endAt > now)) continue;
+        const left = (st.endAt - now) / 1000;
+        const c = $('tc-' + id), b = $('tb-' + id);
+        if (c) c.textContent = clock(Math.ceil(left));
+        if (b) b.style.width = `${(100 * (1 - left / st.dur)).toFixed(1)}%`;
+      }
+    }
+    if (!running()) { clearInterval(tickId); tickId = 0; keepAwake(false); }
+  }
+  function startTick() { if (!tickId) tickId = setInterval(tick, 250); keepAwake(true); }
+  function timerAct(act, id) {
+    const m = model(weekMon + 6), t = timerInfo(m);
+    const r = t && t.rows.find((x) => x.id === id);
+    if (!r) return;
+    const st = tState(id);
+    if (act === 'tStart') {
+      if (!audio) { try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) audio = new AC(); } catch (e) { audio = null; } }
+      if (audio && audio.state === 'suspended') audio.resume().catch(() => {});
+      if (r.sets <= 1) st.n = restNeed(r);
+      else { st.dur = restSec(id); st.endAt = Date.now() + st.dur * 1000; startTick(); }
+    } else if (act === 'tSkip') { st.endAt = 0; st.n += 1; }
+    else if (act === 'tUndo') st.n = Math.max(0, st.n - 1);
+    else if (act === 'tReset') { st.n = 0; st.endAt = 0; }
+    else if (act === 'tEdit') sheet.editing = id;
+    else if (act === 'tSave') {
+      const sec = Number($('tm-m-' + id).value) * 60 + Number($('tm-s-' + id).value);
+      if (!(sec >= 5)) { toast('휴식 시간을 5초 이상으로 골라 주세요'); return; }
+      data.cfg.restSec = Object.assign({}, data.cfg.restSec, { [id]: sec });
+      sheet.editing = null;
+      saveTimer();
+      commit(`${r.name} 휴식 ${clock(sec)}로 저장했어요`);
+      return;
+    }
+    saveTimer();
+    renderTimer(m);
+    if (tab === 'week') renderWeek(m);
+    const again = $('panel').querySelector(`[data-id="${CSS.escape(id)}"]`);
+    if (again) again.focus();
+  }
+
   // ---------- 기록 시트 ----------
   function openSheet(mode, day) {
     const li = mode === 'new' ? data.logs.length : data.logs.findIndex((l) => L.toNum(l.d) === day);
@@ -491,6 +671,7 @@
   }
   function renderSheet(m) {
     if (sheet.kind === 'start') { renderStart(); return; }
+    if (sheet.kind === 'timer') { renderTimer(m); return; }
     const info = sheetInfo(m);
     const rows = info.rows.filter((r) => r.avail === 'ok');
     const others = info.rows.filter((r) => r.avail !== 'ok');
@@ -892,6 +1073,8 @@
     }
     else if (act === 'allok') { for (const r of sheetInfo(model(weekMon + 6)).rows) if (r.avail === 'ok') sheet.res[r.id] = true; renderSheet(model(weekMon + 6)); }
     else if (act === 'saveLog') saveLog();
+    else if (act === 'timer') openTimer();
+    else if (act.startsWith('t') && /^t(Start|Skip|Undo|Reset|Edit|Save)$/.test(act)) timerAct(act, b.dataset.id);
     else if (act === 'chartMode') { chartMode = b.dataset.v === 'each' ? 'each' : 'all'; renderChart(); }
     else if (act === 'chartToggle') { const k = b.dataset.key; if (chartOff.has(k)) chartOff.delete(k); else chartOff.add(k); renderChart(); }
     else if (act === 'askDel') { sheet.confirmDel = true; renderSheet(model(weekMon + 6)); }
@@ -938,10 +1121,12 @@
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     const now = L.localToday();
-    if (now !== today) { today = now; weekMon = L.mondayOf(L.toNum(today)); render(); }
+    if (now !== today) { today = now; weekMon = L.mondayOf(L.toNum(today)); timer = loadTimer(); render(); }
+    if (Object.values(timer.items).some((t) => t.endAt)) { tick(); if (running()) startTick(); }
   });
 
   render();
+  if (Object.values(timer.items).some((t) => t.endAt)) { tick(); if (running()) startTick(); }
   const boot = $('boot');
   if (boot) boot.remove();
   window.onerror = null;
