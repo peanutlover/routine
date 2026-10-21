@@ -15,6 +15,7 @@
   let weekMon = L.mondayOf(L.toNum(today));
   let sheet = null;          // { mode:'new'|'edit', day, slot, res, confirmDel }
   let pendingDel = null;     // 설정에서 삭제 확인 대기 중인 보조 종목 id
+  let pendingMode = null;    // 설정에서 훈련방식 바꾸기 확인 대기 { id, mode, w, name }
   let confirmReset = false;
   let remote = null;         // Claude 계정 저장소(db) 문서, 없으면 이 기기에만 저장
   let toastTimer = 0;
@@ -28,33 +29,74 @@
   function saveLocal() {
     try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) { /* 저장소를 쓸 수 없는 환경 */ }
   }
+  // 숫자 목록 (무게·횟수). int면 정수, sorted면 겹침 없이 오름차순.
+  function numList(v, { int = false, sorted = true, max = 60 } = {}) {
+    const arr = (Array.isArray(v) ? v : String(v == null ? '' : v).split(/[^0-9.]+/)).map(Number)
+      .filter((n) => Number.isFinite(n) && n > 0 && n <= 1000).map((n) => (int ? Math.round(n) : Math.round(n * 100) / 100)).filter((n) => n > 0);
+    return (sorted ? [...new Set(arr)].sort((a, b) => a - b) : arr).slice(0, max);
+  }
   function sanitize(x) {
     if (!x || typeof x !== 'object' || !x.cfg || !Array.isArray(x.logs)) return null;
     const base = L.defaultConfig(today);
     const c = L.migrate(JSON.parse(JSON.stringify(x.cfg)));
-    const EQUIP = ['barbell', 'machine', 'dumbbell'];
+    const g = c.gear && typeof c.gear === 'object' ? c.gear : {};
+    const bandNames = Array.isArray(g.bands) ? [...new Set(g.bands.filter((s) => typeof s === 'string').map((s) => s.trim()).filter(Boolean))].slice(0, 20) : base.gear.bands;
     const cfg = {
       cv: c.cv,
       startDate: /^\d{4}-\d{2}-\d{2}$/.test(c.startDate) ? c.startDate : today,
       from: sanitizeFrom(c.from),
       restSec: sanitizeRest(c.restSec),
       plates: Array.isArray(c.plates) ? [...L.plateCounts(c.plates)].flatMap(([p, n]) => Array(Math.min(n, PAIR_MAX)).fill(p)).sort((a, b) => a - b) : base.plates,
-      main: Object.assign({}, base.main, c.main || {}),
-      acc: Array.isArray(c.acc)
-        ? c.acc.filter((a) => a && a.id && (a.day === 'D' || a.day === 'S')).map((a) => {
-          const b = Object.assign({ name: '종목', part: '', equip: 'dumbbell', w: null, reps: 5, sets: 3, rest: '', inc: 'pct', incV: 5, light: false, from: 1, sw: null }, a);
-          if (!EQUIP.includes(b.equip)) b.equip = 'dumbbell';
-          if (b.sw && !(b.sw.at > 0 && b.sw.w > 0)) b.sw = null;
-          return b;
-        })
-        : base.acc,
+      gear: {
+        db: Array.isArray(g.db) ? numList(g.db) : base.gear.db,
+        bars: Array.isArray(g.bars) ? numList(g.bars) : base.gear.bars,
+        one: Array.isArray(g.one) ? numList(g.one) : base.gear.one,
+        bands: bandNames,
+      },
+      main: sanitizeProg(Object.assign({}, base.main, c.main || {})),
+      acc: Array.isArray(c.acc) ? c.acc.filter((a) => a && a.id && (a.day === 'D' || a.day === 'S')).map(sanitizeAcc) : base.acc,
     };
     const seen = new Set();
     const logs = x.logs
       .filter((l) => l && /^\d{4}-\d{2}-\d{2}$/.test(l.d) && !seen.has(l.d) && seen.add(l.d))
-      .map((l) => Object.assign({ d: l.d, res: l.res && typeof l.res === 'object' ? l.res : {} }, l.p ? { p: 1 } : {}))
+      .map((l) => {
+        const o = { d: l.d, res: l.res && typeof l.res === 'object' ? l.res : {} };
+        if (l.p) o.p = 1;
+        if (l.b && typeof l.b === 'object') {
+          const b = {};
+          for (const [id, v] of Object.entries(l.b)) if (Array.isArray(v)) b[id] = v.filter((s) => typeof s === 'string');
+          if (Object.keys(b).length) o.b = b;
+        }
+        return o;
+      })
       .sort((a, b) => (a.d < b.d ? -1 : 1));
     return { v: 1, updatedAt: +x.updatedAt || 0, started: !!x.started || logs.length > 0, cfg, logs };
+  }
+  // 진행 방식: r 횟수 고정 · w 무게 고정(횟수 단계 ladder)
+  function sanitizeProg(o) {
+    o.prog = o.prog === 'r' ? 'r' : 'w';
+    o.reps = Math.max(1, Math.round(Number(o.reps)) || 5);
+    o.sets = Math.max(1, Math.round(Number(o.sets)) || 3);
+    o.ladder = numList(o.ladder, { int: true, sorted: false, max: 12 });
+    if (!o.ladder.length) o.ladder = [o.reps];
+    return o;
+  }
+  function sanitizeAcc(a) {
+    const b = sanitizeProg(Object.assign({ name: '종목', part: '', mode: 'dumbbell', w: null, prog: 'w', reps: 5, sets: 3, rest: '', inc: 'pct', incV: 5, from: 1 }, a));
+    if (!L.MODE_KEYS.includes(b.mode)) b.mode = 'dumbbell';
+    b.w = Number(b.w) > 0 ? Number(b.w) : null;
+    if (b.mode === 'band') b.w = null;
+    b.inc = b.inc === 'kg' ? 'kg' : 'pct';
+    b.incV = Number(b.incV) >= 0 ? Number(b.incV) : 5;
+    b.stack = numList(b.stack);
+    b.bands = Array.isArray(b.bands) ? b.bands.filter((s) => typeof s === 'string') : [];
+    b.chg = Array.isArray(b.chg) ? b.chg.filter((x) => x && Number(x.no) >= 1 && L.MODE_KEYS.includes(x.mode)).map((x) => {
+      const o = { no: Math.floor(Number(x.no)), mode: x.mode, w: x.mode !== 'band' && Number(x.w) > 0 ? Number(x.w) : null };
+      if (typeof x.name === 'string' && x.name.trim()) o.name = x.name.trim();
+      return o;
+    }).sort((p, q) => p.no - q.no) : [];
+    for (const k of ['equip', 'light', 'sw', 'phase']) delete b[k];
+    return b;
   }
   // 종목별 휴식 타이머 시간(초). 타이머에서 처음 정하면 저장된다.
   function sanitizeRest(r) {
@@ -69,9 +111,7 @@
     for (const [id, o] of Object.entries(sp.acc)) {
       if (!o || typeof o !== 'object') continue;
       const b = {};
-      if (Number.isFinite(Number(o.step)) && o.step !== null && o.step !== '') b.step = Math.max(-9, Math.min(L.ACC_TOP, Math.floor(o.step)));
-      if (o.done != null) b.done = !!o.done;
-      if (o.phase) b.phase = 1;
+      if (Number.isFinite(Number(o.step)) && o.step !== null && o.step !== '') b.step = Math.max(-9, Math.min(20, Math.floor(o.step)));
       if (Number(o.n) > 0) b.n = Math.floor(o.n);
       acc[id] = b;
     }
@@ -134,17 +174,24 @@
     const s = L.fmtW(row);
     return s.endsWith('kg') ? `${esc(s.slice(0, -2))}<span class="unit">kg</span>` : esc(s);
   }
-  // 바벨·기구 종목의 원판 안내 (5kg 단위 + 경량원판). 덤벨이나 무게 생략 종목은 null.
+  // 그 날 무게를 무엇으로 맞추는지 (원판·무게추·밴드). 덤벨처럼 무게 그대로인 종목은 null.
   function plates(row) {
-    if (row.skip || row.w == null) return null;
-    const sol = L.plateMath(L.roundW(row.w), data.cfg.plates, row.equip);
-    return sol ? { sol, text: L.plateText(sol), label: row.equip === 'machine' ? '추' : '원판' } : null;
+    if (row.skip) return null;
+    return L.loadInfo(row, data.cfg);
   }
+  const modeName = (m) => (L.MODES[m] ? L.MODES[m].name : '');
+  // 받침에 따라 조사 고르기: josa('덤벨컬', '을', '를') → 덤벨컬을, josa('바벨', '으로', '로') → 바벨로
+  function josa(word, withB, noB) {
+    const c = String(word).trim().slice(-1).charCodeAt(0) - 0xac00;
+    if (!(c >= 0 && c <= 11171)) return word + noB;
+    const b = c % 28;
+    return word + (b && !(withB === '으로' && b === 8) ? withB : noB);
+  }
+  const toMode = (m) => josa(modeName(m), '으로', '로');
   const BALANCE_NOTE = '<strong>좌우 균형:</strong> 원판을 더 끼운 쪽은 끝까지 밀어 넣고 바깥으로 움직이지 않게 마구리로 고정하세요. 반대쪽은 원판을 조금 바깥쪽에 둔 채 마구리를 끼우세요.';
   function flags(row) {
     let f = '';
     if (row.retry) f += '<span class="flag retry">재도전</span>';
-    if (row.hold) f += '<span class="flag hold">유지</span>';
     if (row.lag) f += `<span class="flag lag">밀림 · 세션 ${row.accNo} 몫</span>`;
     return f;
   }
@@ -158,6 +205,7 @@
     if (tab === 'chart') renderChart();
     if (tab === 'settings' && !$('view-settings').childElementCount) renderSettings();
     $('welcome').hidden = data.started || tab !== 'week';
+    if (!data.started) renderPick();
     if (sheet) renderSheet(m);
   }
 
@@ -198,8 +246,8 @@
         : r.result === false ? '<span class="bad-t" aria-label="실패">✗</span>' : '<span class="no-t" aria-label="안 함">–</span>';
       const undone = logged && r.result == null;
       const pl = undone ? null : plates(r);
-      if (pl && pl.sol.unbalanced) unbalanced = true;
-      h += `<tr class="${r.main ? 'main' : ''}${pl ? ' with-plate' : ''}${undone ? ' undone' : ''}"><td><div class="nm">${esc(r.name)}${flags(r)}</div><div class="pt">${esc(r.main ? '하체 메인' : r.part)}${undone ? ' · 안 함 → 다음 ' + TYPE_NAME[type] + ' 날로' : ''}</div></td>
+      if (pl && pl.unbalanced) unbalanced = true;
+      h += `<tr class="${r.main ? 'main' : ''}${pl ? ' with-plate' : ''}${undone ? ' undone' : ''}"><td><div class="nm">${esc(r.name)}${flags(r)}</div><div class="pt">${esc(r.main ? '하체 메인' : [r.part, modeName(r.mode)].filter(Boolean).join(' · '))}${undone ? ' · 안 함 → 다음 ' + TYPE_NAME[type] + ' 날로' : ''}</div></td>
         <td class="c-w">${wHtml(r)}</td><td class="c-r">${r.reps}×${r.sets}</td><td class="c-t">${esc(r.rest)}</td>${logged ? `<td class="c-s">${mark}</td>` : ''}</tr>`;
       if (pl) h += `<tr class="plate"><td colspan="${logged ? 5 : 4}"><span class="pl">${pl.label}</span>${esc(pl.text)}</td></tr>`;
     }
@@ -265,7 +313,7 @@
     const m = model(L.toNum(today), count);
     const { sim, cfg } = m;
     let h = '<thead><tr><th>세션</th><th>하체 단계</th><th>데드리프트</th><th>스쿼트</th>';
-    for (const a of cfg.acc) h += `<th class="wrap-h">${esc(a.name)}${a.sw ? ` → ${esc(a.sw.name)}` : ''}<br><span class="sdate">${a.day === 'D' ? '데드 날' : '스쿼트 날'}</span></th>`;
+    for (const a of cfg.acc) h += `<th class="wrap-h">${esc(a.name)}<br><span class="sdate">${a.day === 'D' ? '데드 날' : '스쿼트 날'}</span></th>`;
     h += '</tr></thead><tbody>';
     const mark = (v) => (v === true ? '<span class="res ok-t">✓</span>' : v === false ? '<span class="res bad-t">✗</span>' : '');
     for (let i = 0; i < count && sim.main[i]; i++) {
@@ -286,8 +334,8 @@
         const ai = sim.real.acc[a.id];
         const out = i < ai ? sim.acc[a.id][i].out : null;
         const behind = i === ai && ai < sim.real.main ? '<span class="rp"> 밀림</span>' : '';
-        const w = L.fmtW({ w: q.w, n: q.n, inc: q.inc, incV: q.incV }).replace('kg', '');
-        const switched = a.sw && q.phase ? `<span class="rp"> ${esc(a.sw.name)}</span>` : '';
+        const w = L.fmtW(q).replace('kg', '');
+        const switched = q.mode !== a.mode || q.name !== a.name ? `<span class="rp"> ${esc(q.name !== a.name ? q.name : modeName(q.mode))}</span>` : '';
         h += `<td><span class="w">${esc(w)}</span> <span class="rp">×${q.reps}</span>${mark(out)}${behind}${switched}</td>`;
       }
       h += '</tr>';
@@ -314,20 +362,21 @@
       for (const r of e.rows) {
         if (r.result == null) continue;
         const ent = r.main ? 'main' : r.id;
-        const key = r.main ? r.id : r.id + (r.phase ? '.b' : '');
+        const key = r.main ? r.id : r.id + '.' + r.mode;
         const rel = r.w == null;
         const y = rel ? (r.inc === 'kg' ? r.n * r.incV : (Math.pow(1 + r.incV / 100, r.n) - 1) * 100) : L.roundW(r.w);
-        const text = `${L.fmtW(r)} × ${r.reps}회 × ${r.sets}세트 · ${r.result ? '성공' : '실패'}`;
+        const text = `${r.band ? (r.bands && r.bands.length ? r.bands.join('+') : '밴드') : L.fmtW(r)} × ${r.reps}회 × ${r.sets}세트 · ${r.result ? '성공' : '실패'}`;
         recs.push({ d, name: r.name, text });
-        if (!each.has(key)) each.set(key, { key, ent, name: r.name, color: color(ent), unit: rel ? (r.inc === 'kg' ? '+kg' : '+%') : 'kg', pts: [] });
+        if (r.band) continue;   // 고무밴드는 무게가 없어 표로만 본다
+        if (!each.has(key)) each.set(key, { key, ent, mode: r.mode, name: r.name, color: color(ent), unit: rel ? (r.inc === 'kg' ? '+kg' : '+%') : 'kg', pts: [] });
         each.get(key).pts.push({ x: d, y, ok: r.result, text });
         if (rel || !slot.get(ent)) continue;
         const w = r.main ? e.main.dl : r.w;
-        const phase = r.phase || 0;
+        const phase = r.mode;
         let s = all.get(ent);
         if (!s) {
           const a = cfg.acc.find((x) => x.id === ent);
-          s = { key: ent, name: r.main ? '데드리프트·스쿼트' : a.sw ? `${a.name}→${a.sw.name}` : a.name, color: color(ent), slot: slot.get(ent), pts: [], g: 1, prev: w, phase };
+          s = { key: ent, name: r.main ? '데드리프트·스쿼트' : a.name, color: color(ent), slot: slot.get(ent), pts: [], g: 1, prev: w, phase };
           all.set(ent, s);
         } else {
           if (phase === s.phase) s.g *= w / s.prev;
@@ -337,12 +386,18 @@
         s.pts.push({ x: d, g: s.g, ok: r.result, v: `${pct > 0 ? '+' : ''}${pct}%`, text: `${r.main ? `데드 ${L.roundW(e.main.dl)}kg` : L.fmtW(r)} · ${r.result ? '성공' : '실패'}` });
       }
     }
+    // 한 종목을 여러 훈련방식으로 했으면 종목별 그래프를 방식마다 나눠 이름에 붙인다.
+    const modes = new Map();
+    for (const s of each.values()) if (s.ent !== 'main') modes.set(s.ent, (modes.get(s.ent) || 0) + 1);
+    for (const s of each.values()) if (modes.get(s.ent) > 1) s.name += ` · ${modeName(s.mode)}`;
     for (const s of all.values()) {
       const top = Math.max(...s.pts.map((p) => p.g));
       for (const p of s.pts) p.y = top > 1 + 1e-9 ? (p.g - 1) / (top - 1) : 0;
     }
-    const order = (x) => (x.key === 'dl' ? 0 : x.key === 'sq' ? 1 : (slot.get(x.ent) || 99) * 2 + (x.key.endsWith('.b') ? 1 : 0));
-    return { each: [...each.values()].sort((a, b) => order(a) - order(b)), all: [...all.values()].sort((a, b) => a.slot - b.slot), recs };
+    const first = new Map();
+    for (const s of each.values()) first.set(s.key, s.pts[0].x);
+    const order = (x) => (x.key === 'dl' ? 0 : x.key === 'sq' ? 1 : (slot.get(x.ent) || 99));
+    return { each: [...each.values()].sort((a, b) => order(a) - order(b) || first.get(a.key) - first.get(b.key)), all: [...all.values()].sort((a, b) => a.slot - b.slot), recs };
   }
   function niceTicks(lo, hi, n) {
     const raw = (hi - lo) / Math.max(1, n);
@@ -672,6 +727,7 @@
   function renderSheet(m) {
     if (sheet.kind === 'start') { renderStart(); return; }
     if (sheet.kind === 'timer') { renderTimer(m); return; }
+    if (sheet.kind === 'add') { renderAdd(); return; }
     const info = sheetInfo(m);
     const rows = info.rows.filter((r) => r.avail === 'ok');
     const others = info.rows.filter((r) => r.avail !== 'ok');
@@ -685,7 +741,7 @@
       const v = sheet.res[r.id];
       const pl = plates(r);
       h += `<div class="lrow"><div><div class="nm">${esc(r.name)}${flags(r)}</div><div class="rx"><b>${wHtml(r)}</b> · ${r.reps}회 × ${r.sets}세트</div>
-        ${pl ? `<div class="rx pl-line"><span class="pl">${pl.label}</span>${esc(pl.text)}</div>` : ''}${pl && pl.sol.unbalanced ? `<div class="rx bal">${BALANCE_NOTE}</div>` : ''}</div>
+        ${pl ? `<div class="rx pl-line"><span class="pl">${pl.label}</span>${esc(pl.text)}</div>` : ''}${pl && pl.unbalanced ? `<div class="rx bal">${BALANCE_NOTE}</div>` : ''}</div>
         <div class="seg" role="group" aria-label="${esc(r.name)} 결과">
           <button type="button" class="y" data-act="res" data-id="${esc(r.id)}" data-v="1" aria-pressed="${v === true}">성공</button>
           <button type="button" class="n" data-act="res" data-id="${esc(r.id)}" data-v="0" aria-pressed="${v === false}">실패</button>
@@ -711,8 +767,12 @@
     for (const r of info.rows) if (r.avail === 'ok' && typeof sheet.res[r.id] === 'boolean') res[r.id] = sheet.res[r.id];
     if (!Object.keys(res).length) { toast('한 종목 이상 성공·실패를 골라 주세요'); return; }
     const left = info.rows.filter((r) => r.avail === 'ok' && !(r.id in res)).length;
+    // 고무밴드 종목은 그날 쓴 밴드를 함께 남긴다.
+    const bands = {};
+    for (const r of info.rows) if (r.band && r.id in res) bands[r.id] = (r.bands || []).slice();
+    const entry = (d) => Object.assign({ d, res, p: 1 }, Object.keys(bands).length ? { b: bands } : {});
     if (sheet.mode === 'new') {
-      data.logs.push({ d: L.toStr(sheet.day), res, p: 1 });
+      data.logs.push(entry(L.toStr(sheet.day)));
       const after = L.simulate(data.cfg, data.logs, today, { until: -Infinity });
       let msg;
       if (after.cur.no > m.cur.no) {
@@ -722,14 +782,16 @@
       if (left) msg += ` · 안 한 ${left}종목은 다음 ${TYPE_NAME[info.type]} 날로`;
       closeSheet(); commit(msg);
     } else {
-      data.logs[sheet.li] = { d: data.logs[sheet.li].d, res, p: 1 };
+      data.logs[sheet.li] = entry(data.logs[sheet.li].d);
       closeSheet(); commit('결과를 고쳤어요. 이후 계획을 다시 계산했어요');
     }
   }
 
   // ---------- 이어서 시작 (시작 지점) ----------
   // 이미 하던 루틴을 이어서 기록할 때: 그 날 운동이 몇 세션의 몇 번째였는지, 그때 하체 단계·무게·횟수를 정한다.
-  const stageName = (s) => ['1단계 · 묶음 시작', '2단계', '3단계', '4단계 · 가장 무거운 날'][s - 1];
+  const stageName = (s) => (data.cfg.main.prog === 'w'
+    ? `${s}단계 · ${L.ladderReps(data.cfg.main, s - 1)}회${s === 1 ? ' · 묶음 시작' : ''}`
+    : ['1단계 · 묶음 시작', '2단계', '3단계', '4단계 · 가장 무거운 날'][s - 1]);
   function openStart(day) {
     const cfg = data.cfg;
     const sp = L.startPoint(cfg);
@@ -739,7 +801,7 @@
     if (data.logs.length) day = L.toNum(data.logs[0].d);
     else if (day == null) day = L.toNum(cfg.startDate) < T ? L.toNum(cfg.startDate) : T - 1;
     const acc = {};
-    for (const a of cfg.acc) { const s = st.acc[a.id]; acc[a.id] = { w: a.w, step: s.step, done: s.done, phase: s.phase, n: s.n }; }
+    for (const a of cfg.acc) { const s = st.acc[a.id]; acc[a.id] = { w: s.w, mode: s.mode, step: s.step, n: s.n }; }
     sheet = { kind: 'start', day, no: sp.no, k: sp.k, stage: sp.stage, dl: cfg.main.dl, acc, note: '', err: '', opener: document.activeElement };
     $('sheet').hidden = false;
     renderStart();
@@ -760,24 +822,23 @@
     sheet.dl = L.roundW(p.presc.main.dl);
     for (const a of cfg.acc) {
       const s = p.state.acc[a.id];
-      sheet.acc[a.id] = { w: s.w == null ? null : L.roundW(s.w), step: s.step, done: s.done, phase: s.phase, n: s.n };
+      sheet.acc[a.id] = { w: s.w == null ? null : L.roundW(s.w), mode: s.mode, step: s.step, n: s.n };
     }
     sheet.note = `세션 ${L.startPoint(cfg).no}부터 모두 성공했다고 보고 채웠어요. 실제와 다르면 고쳐 주세요.`;
   }
   // 하체 단계를 직접 바꾸면 상체·팔 횟수도 그 단계에 맞춘다.
   function stageDefaults() {
-    for (const a of data.cfg.acc) Object.assign(sheet.acc[a.id], L.accAt((a.from || 1) > sheet.no ? 1 : sheet.stage));
+    for (const a of data.cfg.acc) Object.assign(sheet.acc[a.id], L.accAt((a.from || 1) > sheet.no ? 1 : sheet.stage, a));
   }
+  // 보조 종목 사다리 칸 고르기: 무게 고정은 횟수, 횟수 고정은 무게로 보여준다.
   function stepOptions(a, o) {
-    const reps = (step) => L.ladderReps(a, { w: o.w, step });
-    const cur = o.done ? 'h' : String(o.step);
+    const label = (step) => (a.prog === 'r' ? L.fmtW({ w: L.stepW(data.cfg, a, o.mode, o.w, step), n: step, inc: a.inc, incV: a.incV }) : `${L.ladderReps(a, step)}회`);
     const opts = [];
-    for (let step = Math.min(-2, o.step); step <= L.ACC_TOP; step++) {
-      if (step < 0 && reps(step) >= reps(step + 1)) continue;
-      opts.push([String(step), `${reps(step)}회 · ${step < 0 ? '낮춘 단계' : `${step + 1}단계`}`]);
+    for (let step = Math.min(-2, o.step); step <= L.accTop(a); step++) {
+      if (step < 0 && label(step) === label(step + 1)) continue;
+      opts.push([String(step), `${label(step)} · ${step < 0 ? '낮춘 단계' : `${step + 1}단계`}`]);
     }
-    opts.push(['h', `${reps(L.ACC_TOP)}회 유지 · 증량 대기`]);
-    return opts.map(([v, t]) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${t}</option>`).join('');
+    return opts.map(([v, t]) => `<option value="${v}" ${v === String(o.step) ? 'selected' : ''}>${esc(t)}</option>`).join('');
   }
   function renderStart() {
     const cfg = data.cfg;
@@ -790,7 +851,7 @@
       <div class="row2"><label class="field"><span>${n ? '날짜 (첫 기록)' : '날짜'}</span><input type="date" id="st-day" data-sk="day" value="${L.toStr(d.day)}" max="${L.toStr(T)}" ${n ? 'disabled' : ''}></label>
       <label class="field"><span>세션 번호</span><input type="number" inputmode="numeric" min="1" step="1" id="st-no" data-sk="no" value="${d.no}"></label></div>
       <div class="row2"><label class="field"><span>이 날 운동</span><select id="st-k" data-sk="k">${[0, 1, 2, 3, 4, 5].map((k) => `<option value="${k}" ${k === d.k ? 'selected' : ''}>${k + 1}번째 · ${TYPE_NAME[L.slotType(k)]}</option>`).join('')}</select></label>
-      <label class="field"><span>하체 단계</span><select id="st-stage" data-sk="stage">${[1, 2, 3, 4].map((s) => `<option value="${s}" ${s === d.stage ? 'selected' : ''}>${stageName(s)}</option>`).join('')}</select></label></div>
+      <label class="field"><span>하체 단계</span><select id="st-stage" data-sk="stage">${Array.from({ length: L.mainTop(cfg) }, (_, i) => i + 1).map((s) => `<option value="${s}" ${s === d.stage ? 'selected' : ''}>${stageName(s)}</option>`).join('')}</select></label></div>
       ${d.note ? `<p class="small note">${esc(d.note)}</p>` : ''}
       <div class="row2"><label class="field"><span>데드리프트 (kg)</span><input type="number" inputmode="decimal" step="0.1" min="1" id="st-dl" data-sk="dl" value="${d.dl}"></label>
       <div class="field"><span>스쿼트</span><div class="derived" id="st-sq"></div></div></div>
@@ -798,15 +859,17 @@
     for (const a of cfg.acc) {
       const o = d.acc[a.id];
       const off = (a.from || 1) > d.no;
-      const name = a.sw && o.phase ? a.sw.name : a.name;
-      h += `<div class="strow"><div class="stname"><span class="tag ${a.day}">${a.day === 'D' ? '데드 날' : '스쿼트 날'}</span><b>${esc(name)}</b>${off ? `<span class="small">세션 ${a.from}부터</span>` : ''}</div>
-        <div class="row2">${o.w == null ? '<div class="field"><span>무게</span><div class="derived">생략</div></div>'
-          : `<label class="field"><span>무게 (kg)</span><input type="number" inputmode="decimal" step="0.1" min="0.1" id="st-w-${esc(a.id)}" data-sk="w" data-id="${esc(a.id)}" value="${o.w}"></label>`}
-        <label class="field"><span>횟수</span><select id="st-step-${esc(a.id)}" data-sk="step" data-id="${esc(a.id)}">${stepOptions(a, o)}</select></label></div>
-        ${a.sw ? `<label class="field"><span>종목</span><select id="st-phase-${esc(a.id)}" data-sk="phase" data-id="${esc(a.id)}"><option value="0" ${o.phase ? '' : 'selected'}>${esc(a.name)}</option><option value="1" ${o.phase ? 'selected' : ''}>${esc(a.sw.name)}</option></select></label>` : ''}</div>`;
+      const seg = L.segAt(a, d.no);
+      const own = seg.no === 1;   // 처음 설정의 무게만 여기서 고친다 (훈련방식을 바꾼 뒤 무게는 설정에서)
+      h += `<div class="strow"><div class="stname"><span class="tag ${a.day}">${a.day === 'D' ? '데드 날' : '스쿼트 날'}</span><b>${esc(seg.name)}</b><span class="small">${esc(modeName(o.mode))}</span>${off ? `<span class="small">세션 ${a.from}부터</span>` : ''}</div>`;
+      if (o.mode === 'band') { h += '<p class="small">고무밴드는 증량 없이 기록만 해요.</p></div>'; continue; }
+      h += `<div class="row2">${o.w == null ? '<div class="field"><span>무게</span><div class="derived">생략</div></div>'
+          : own ? wField(`st-w-${a.id}`, o.mode, o.w, '무게', `data-sk="w" data-id="${esc(a.id)}"`)
+            : `<div class="field"><span>무게</span><div class="derived">${esc(L.fmtW({ w: o.w }))}</div></div>`}
+        <label class="field"><span>${a.prog === 'r' ? '무게 단계' : '횟수'}</span><select id="st-step-${esc(a.id)}" data-sk="step" data-id="${esc(a.id)}">${stepOptions(a, o)}</select></label></div></div>`;
     }
     h += '</div>';
-    if (d.stage === L.MAIN_STAGES) h += '<p class="small">하체 4단계 세션이라 이 세션의 상체·팔은 쉬어요. 횟수는 다음 묶음에서 이어갈 단계로 골라 주세요.</p>';
+    if (L.prescribe(cfg, L.initState(Object.assign({}, cfg, { from: { no: d.no, k: d.k, stage: d.stage, acc: {} } })), d.no).main.top) h += '<p class="small">하체가 가장 무거운 단계라 이 세션의 상체·팔은 쉬어요. 무게·횟수는 다음 세션에서 이어갈 단계로 골라 주세요.</p>';
     if (d.err) h += `<p class="small err" role="alert">${esc(d.err)}</p>`;
     h += `<button class="btn block" type="button" data-act="saveStart">이 지점부터 이어가기</button>
       <button class="btn ghost" type="button" data-act="close">닫기</button>`;
@@ -832,7 +895,7 @@
     if (f === 'dl') { d.dl = Number(el.value); startSquat(); return; }
     if (f === 'w' && o) {
       o.w = Number(el.value);
-      if (done && a && a.light) { const sel = $('st-step-' + a.id); if (sel) sel.innerHTML = stepOptions(a, o); }
+      if (done && a && a.prog === 'r') { const sel = $('st-step-' + a.id); if (sel) sel.innerHTML = stepOptions(a, o); }
       return;
     }
     if (!done) return;
@@ -843,8 +906,7 @@
       d.no = v; refillStart();
     } else if (f === 'k') d.k = Number(el.value);
     else if (f === 'stage') { d.stage = Number(el.value); stageDefaults(); d.note = ''; }
-    else if (f === 'step' && o) { if (el.value === 'h') { o.step = L.ACC_TOP; o.done = true; } else { o.step = Number(el.value); o.done = false; } return; }
-    else if (f === 'phase' && o && a && a.sw) { o.phase = el.value === '1' ? 1 : 0; if (o.phase && o.w != null) o.w = a.sw.w; }
+    else if (f === 'step' && o) { o.step = Number(el.value); return; }
     renderStart();
   }
   function saveStart() {
@@ -858,14 +920,14 @@
       if (d.k % 2 !== L.startPoint(cfg).k % 2) return fail(`이미 기록한 운동과 데드리프트·스쿼트 순서가 어긋나요. 이 날 운동을 ${TYPE_NAME[L.slotType(L.startPoint(cfg).k)]} 날(${L.startPoint(cfg).k % 2 ? '2·4·6' : '1·3·5'}번째)로 골라 주세요.`);
     }
     if (!(d.dl > 0)) return fail('데드리프트 무게를 넣어 주세요.');
-    for (const a of cfg.acc) { const w = d.acc[a.id].w; if (w != null && !(w > 0)) return fail(`${a.name} 무게를 확인해 주세요.`); }
+    for (const a of cfg.acc) { const w = d.acc[a.id].w; if (w != null && d.acc[a.id].mode !== 'band' && !(w > 0)) return fail(`${a.name} 무게를 확인해 주세요.`); }
     cfg.startDate = L.toStr(d.day);
     cfg.main.dl = L.roundW(d.dl);
     const acc = {};
     for (const a of cfg.acc) {
       const o = d.acc[a.id];
-      if (a.w != null && o.w != null) a.w = L.roundW(o.w);
-      acc[a.id] = { step: o.step, done: !!o.done && o.step === L.ACC_TOP, phase: a.sw && o.phase ? 1 : 0, n: o.n || 0 };
+      if (a.w != null && o.w != null && L.segAt(a, d.no).no === 1) a.w = L.roundW(o.w);
+      acc[a.id] = { step: o.step, n: o.n || 0 };
     }
     cfg.from = { no: d.no, k: d.k, stage: d.stage, acc };
     const day = d.day;
@@ -877,12 +939,87 @@
     if (day < T && L.canLog(model(weekMon + 6).tl, day)) openSheet('new', day);
   }
 
+  // ---------- 종목 입력 (설정 카드 · 운동 추가 시트 공통) ----------
+  const listOf = (mode) => L.gearList(data.cfg, mode);
+  const same = (x, y) => x != null && y != null && Math.abs(x - y) < 1e-9;
+  // 무게 입력: 목록 방식(덤벨·일체형 바벨·원판 한 장)은 가진 무게에서 고르고, 나머지는 숫자로 (비우면 생략).
+  function wField(id, mode, w, label, attrs) {
+    if (mode === 'band') return '';
+    if (L.MODES[mode].list) {
+      const list = listOf(mode);
+      if (!list.length) return `<div class="field"><span>${esc(label)}</span><div class="derived">설정 → 장비에 ${esc(modeName(mode))} 무게를 넣어 주세요</div></div>`;
+      const vals = w != null && !list.some((v) => same(v, w)) ? [w].concat(list).sort((a, b) => a - b) : list;
+      return `<label class="field"><span>${esc(label)}</span><select id="${esc(id)}" ${attrs}>${vals.map((v) => `<option value="${v}" ${same(v, w) ? 'selected' : ''}>${v}kg${list.some((u) => same(u, v)) ? '' : ' (목록에 없음)'}</option>`).join('')}</select></label>`;
+    }
+    return `<label class="field"><span>${esc(label)} (kg)</span><input type="number" inputmode="decimal" step="0.5" min="0" id="${esc(id)}" ${attrs} value="${w == null ? '' : w}" placeholder="생략"></label>`;
+  }
+  // 훈련방식을 바꿀 때의 무게: 목록 방식이면 가장 가까운 가진 무게, 밴드는 없음.
+  function snapW(mode, w) {
+    if (mode === 'band') return null;
+    const list = listOf(mode);
+    if (!L.MODES[mode].list || !list.length) return w;
+    if (w == null) return list[0];
+    return list.reduce((b, v) => (Math.abs(v - w) < Math.abs(b - w) ? v : b));
+  }
+  // 지금 쓰는 훈련방식 구간: 기록 중에 바꿨으면 마지막으로 바꾼 것, 아니면 처음 설정.
+  function curSeg(a) {
+    const c = (a.chg || []).slice().sort((p, q) => p.no - q.no).pop();
+    return c ? { no: c.no, mode: c.mode, w: c.w, name: c.name || a.name, chg: c } : { no: 0, mode: a.mode, w: a.w, name: a.name, chg: null };
+  }
+  // 지금 훈련방식을 바꾸면 적용되는 그 종목의 세션 번호: 진행 중인 세션을 이미 한 번이라도 했으면 다음 세션부터.
+  function changeNo(a) {
+    const sim = model(L.toNum(today)).sim;
+    const sess = sim.acc[a.id] && sim.acc[a.id][sim.real.acc[a.id]];
+    return sess ? sess.no + (sess.res.length ? 1 : 0) : sim.cur.no;
+  }
+  function progNote(x) {
+    if (x.mode === 'band') return '고무밴드는 힘을 정확히 잴 수 없어 증량하지 않고 기록만 해요. 밴드를 바꾸면 그다음 기록부터 바뀐 밴드로 남아요.';
+    const up = L.MODES[x.mode].list ? `가진 ${modeName(x.mode)} 중 다음 무게` : x.inc === 'kg' ? `+${x.incV}kg` : `+${x.incV}%`;
+    return x.prog === 'r'
+      ? `횟수는 그대로 두고 세션마다 한 칸(${up})씩 무게를 올려 3단계까지 가요. 3단계를 성공하면 2단계 무게부터 새 묶음이에요.`
+      : `무게는 그대로 두고 세션마다 다음 횟수로 가요. 마지막 ${L.ladderOf(x).slice(-1)[0]}회를 성공하면 다음 세션에 한 칸(${up}) 올려 첫 횟수부터 다시 해요.`;
+  }
+  function exForm(x, key, opt = {}) {
+    const id = (f) => `${key}-${f}`;
+    const cont = L.MODES[x.mode].cont;
+    const modeSel = opt.modeSel || x.mode;
+    let h = `<div class="row2"><label class="field"><span>훈련방식</span><select id="${esc(id('mode'))}" data-f="mode">${L.MODE_KEYS.map((k) => `<option value="${k}" ${k === modeSel ? 'selected' : ''}>${L.MODES[k].name}</option>`).join('')}</select></label>
+      <label class="field"><span>부위</span><input type="text" id="${esc(id('part'))}" data-f="part" value="${esc(x.part)}"></label></div>`;
+    if (opt.pend) h += opt.pend;
+    if (x.mode === 'band') {
+      const names = data.cfg.gear.bands;
+      h += `<div class="field"><span>쓰는 밴드 (여러 개 고를 수 있어요)</span><div class="chips">${names.length
+        ? names.map((n, i) => `<label class="chip"><input type="checkbox" id="${esc(id('band' + i))}" data-f="band" value="${esc(n)}" ${x.bands.includes(n) ? 'checked' : ''}><span>${esc(n)}</span></label>`).join('')
+        : '<span class="small">설정 → 장비에서 밴드를 추가해 주세요</span>'}</div></div>`;
+    } else {
+      h += `<div class="row2">${wField(id('w'), x.mode, x.w, opt.wLabel || '시작 무게', 'data-f="w"')}${x.mode === 'stack'
+        ? `<label class="field"><span>무게추 단계 (kg, 쉼표로)</span><input type="text" inputmode="decimal" id="${esc(id('stack'))}" data-f="stack" value="${esc(x.stack.join(', '))}" placeholder="예: 20, 23, 26, 29"></label>` : ''}</div>`;
+      if (x.mode === 'stack' && !x.stack.length) h += '<p class="small">머신에 달린 무게추 무게를 차례로 넣어 주세요. 비워 두면 5kg 간격으로 보고 계산해요.</p>';
+    }
+    const sets = `<label class="field"><span>세트</span><input type="number" inputmode="numeric" min="1" id="${esc(id('sets'))}" data-f="sets" value="${x.sets}"></label>`;
+    const rest = `<label class="field"><span>휴식</span><input type="text" id="${esc(id('rest'))}" data-f="rest" value="${esc(x.rest)}"></label>`;
+    const reps = `<label class="field"><span>횟수</span><input type="number" inputmode="numeric" min="1" id="${esc(id('reps'))}" data-f="reps" value="${x.reps}"></label>`;
+    if (x.mode === 'band') h += `<div class="row3">${reps}${sets}${rest}</div>`;
+    else {
+      h += `<div class="row2"><label class="field"><span>진행 방식</span><select id="${esc(id('prog'))}" data-f="prog"><option value="w" ${x.prog !== 'r' ? 'selected' : ''}>무게 고정</option><option value="r" ${x.prog === 'r' ? 'selected' : ''}>횟수 고정</option></select></label>
+        ${x.prog === 'r' ? reps : `<label class="field"><span>횟수 단계 (쉼표로)</span><input type="text" inputmode="numeric" id="${esc(id('ladder'))}" data-f="ladder" value="${esc(L.ladderOf(x).join(', '))}" placeholder="예: 3, 4, 5"></label>`}</div>
+        <div class="row2 pair"><div class="row2">${sets}${rest}</div>${cont ? `<div class="row2"><label class="field"><span>증량 방식</span><select id="${esc(id('inc'))}" data-f="inc"><option value="pct" ${x.inc === 'pct' ? 'selected' : ''}>%</option><option value="kg" ${x.inc === 'kg' ? 'selected' : ''}>kg</option></select></label>
+          <label class="field"><span>증량 값</span><input type="number" inputmode="decimal" step="0.5" min="0" id="${esc(id('incv'))}" data-f="incV" value="${x.incV}"></label></div>` : ''}</div>`;
+    }
+    h += `<p class="small prognote">${esc(progNote(x))}</p>`;
+    return h;
+  }
+  function pendBox(a, pm) {
+    return `<div class="swbox" role="group" aria-label="훈련방식 바꾸기"><p class="small"><strong>${esc(toMode(pm.mode))} 바꿀까요?</strong> 이 종목의 세션 ${changeNo(a)}부터 새 무게의 첫 단계로 시작하고, 지난 기록은 그대로 남아요.</p>
+      <div class="row2"><label class="field"><span>이름</span><input type="text" id="pm-name" data-pm="name" value="${esc(pm.name)}"></label>${wField('pm-w', pm.mode, pm.w, '시작 무게', 'data-pm="w"')}</div>
+      <div class="btnrow"><button class="btn" type="button" data-act="pmOk">바꾸기</button><button class="btn ghost" type="button" data-act="pmCancel">취소</button></div></div>`;
+  }
+
   // ---------- 설정 ----------
   function renderSettings() {
     const cfg = data.cfg;
     const sp = L.startPoint(cfg);
     const wl = sp.no > 1 ? `세션 ${sp.no} 무게` : '시작 무게';
-    const equipOpts = (v) => [['barbell', '바벨'], ['machine', '머신·케이블'], ['dumbbell', '덤벨']].map(([k, t]) => `<option value="${k}" ${v === k ? 'selected' : ''}>${t}</option>`).join('');
     let h = `<div class="card"><h2>시작 지점</h2>
       <p class="startsum"><b>${longDate(L.toNum(cfg.startDate))}</b> · 세션 ${sp.no}의 ${sp.k + 1}번째 운동(${TYPE_NAME[L.slotType(sp.k)]}) · 하체 ${sp.stage}단계</p>
       <p class="small">이미 하던 루틴이 있으면 시작 지점을 그 세션으로 옮기세요. 그 날부터 오늘까지 한 운동은 이번 주 화면에서 지난 날을 눌러 날짜순으로 기록하면 돼요. 아래 무게는 시작 지점 세션의 무게예요.</p>
@@ -899,37 +1036,40 @@
       }).join('')}</div>
       <p class="small">바벨·머신 종목에는 5kg 단위 무게와 나머지를 채울 경량원판을 함께 보여줘요. 목표 무게 이상이 되는 가장 가벼운 조합을 고르고, 바벨은 그다음으로 좌우가 고른 조합을 골라요.</p></div>`;
 
-    h += `<div class="card"><h2>하체 메인 · 데드리프트와 스쿼트</h2>
-      <div class="row2"><label class="field"><span>데드리프트 ${wl} (kg)</span><input type="number" inputmode="decimal" step="0.1" min="1" id="set-dl" data-k="main.dl" value="${cfg.main.dl}"></label>
-      <div class="field"><span>스쿼트 ${wl}</span><div class="derived" id="sqDerived"></div></div></div>
-      <div class="row3"><label class="field"><span>횟수</span><input type="number" inputmode="numeric" min="1" id="set-mreps" data-k="main.reps" value="${cfg.main.reps}"></label>
-      <label class="field"><span>세트</span><input type="number" inputmode="numeric" min="1" id="set-msets" data-k="main.sets" value="${cfg.main.sets}"></label>
-      <label class="field"><span>휴식</span><input type="text" id="set-mrest" data-k="main.rest" value="${esc(cfg.main.rest)}"></label></div></div>`;
+    const g = cfg.gear;
+    const gearRow = (k, label) => `<label class="field"><span>${label} (kg, 쉼표로 구분)</span><input type="text" inputmode="decimal" id="set-gear-${k}" data-k="gear.${k}" value="${esc(g[k].join(', '))}"></label>`;
+    h += `<div class="card"><h2>장비</h2>
+      <p class="small">헬스장마다 다른 무게를 넣어 주세요. 덤벨·일체형 바벨·원판 한 장 종목은 이 무게들 안에서 다음 무게로 올라가요(원판을 더 끼울 수 없으니까요). 머신 무게추는 종목마다 따로 넣어요.</p>
+      ${gearRow('db', '덤벨')}${gearRow('bars', '일체형 바벨')}${gearRow('one', '한 장으로 드는 원판')}
+      <div class="field"><span>고무밴드</span><div class="bands">${g.bands.map((n, i) => `<div class="bandrow"><input type="text" id="set-band-${i}" data-k="band.${i}" value="${esc(n)}" aria-label="${i + 1}번째 밴드 이름"><button class="btn ghost" type="button" data-act="delBand" data-i="${i}" aria-label="${esc(n)} 빼기">빼기</button></div>`).join('') || '<span class="small">밴드가 없어요</span>'}</div></div>
+      <div class="btnrow"><button class="btn ghost" type="button" data-act="addBand">+ 밴드 추가</button></div></div>`;
 
-    h += '<div class="card"><h2>상체·팔 보조 운동</h2><p class="small">무게를 비워 두면 "무게 생략"으로 두고 증량분만 +1kg처럼 표시해요.</p>';
-    cfg.acc.forEach((a, i) => {
+    const mm = cfg.main;
+    h += `<div class="card"><h2>하체 메인 · 데드리프트와 스쿼트</h2>
+      <div class="row2"><label class="field"><span>데드리프트 ${wl} (kg)</span><input type="number" inputmode="decimal" step="0.1" min="1" id="set-dl" data-k="main.dl" value="${mm.dl}"></label>
+      <div class="field"><span>스쿼트 ${wl}</span><div class="derived" id="sqDerived"></div></div></div>
+      <div class="row2"><label class="field"><span>진행 방식</span><select id="set-mprog" data-k="main.prog"><option value="r" ${mm.prog !== 'w' ? 'selected' : ''}>횟수 고정</option><option value="w" ${mm.prog === 'w' ? 'selected' : ''}>무게 고정</option></select></label>
+      ${mm.prog === 'w' ? `<label class="field"><span>횟수 단계 (쉼표로)</span><input type="text" inputmode="numeric" id="set-mladder" data-k="main.ladder" value="${esc(L.ladderOf(mm).join(', '))}"></label>`
+        : `<label class="field"><span>횟수</span><input type="number" inputmode="numeric" min="1" id="set-mreps" data-k="main.reps" value="${mm.reps}"></label>`}</div>
+      <div class="row2"><label class="field"><span>세트</span><input type="number" inputmode="numeric" min="1" id="set-msets" data-k="main.sets" value="${mm.sets}"></label>
+      <label class="field"><span>휴식</span><input type="text" id="set-mrest" data-k="main.rest" value="${esc(mm.rest)}"></label></div>
+      <p class="small">${mm.prog === 'w'
+        ? `무게는 그대로 두고 세션마다 다음 횟수로 가요. 마지막 ${L.ladderOf(mm).slice(-1)[0]}회를 성공하면 ${mm.pct}% 올려 첫 횟수부터 해요. 마지막 횟수 세션은 상체·팔이 쉬어요(단계가 3개 이상일 때).`
+        : `횟수는 그대로 두고 세션마다 ${mm.pct}%씩 올려 4단계까지 가고, 4단계를 성공하면 2단계 무게로 내려 새 묶음을 시작해요.`}</p></div>`;
+
+    h += `<div class="card"><h2>상체·팔 보조 운동</h2><p class="small">훈련방식은 언제든 바꿀 수 있어요. 기록이 있으면 그 종목의 다음 세션부터 새 무게로 시작하고 지난 기록은 그대로 둬요. 바벨·머신 무게를 비워 두면 "무게 생략"으로 두고 증량분만 +1kg처럼 표시해요.</p>`;
+    for (const a of cfg.acc) {
       const del = pendingDel === a.id;
-      h += `<div class="acc"><div class="acc-head"><span class="tag ${a.day}">${a.day === 'D' ? '데드 날' : '스쿼트 날'}</span>
-        <input type="text" id="acc-${esc(a.id)}-name" data-k="acc.${i}.name" value="${esc(a.name)}" aria-label="종목 이름">
+      const cur = curSeg(a);
+      const pm = pendingMode && pendingMode.id === a.id ? pendingMode : null;
+      const x = Object.assign({}, a, { mode: cur.mode, w: cur.w, name: cur.name });
+      h += `<div class="acc" data-ex="${esc(a.id)}"><div class="acc-head"><span class="tag ${a.day}">${a.day === 'D' ? '데드 날' : '스쿼트 날'}</span>
+        <input type="text" id="acc-${esc(a.id)}-name" data-f="name" value="${esc(cur.name)}" aria-label="종목 이름">
         <button class="btn ${del ? 'danger' : 'ghost'}" type="button" data-act="delAcc" data-id="${esc(a.id)}">${del ? '한 번 더 누르면 삭제' : '삭제'}</button></div>
-        <div class="row3"><label class="field"><span>부위</span><input type="text" id="acc-${esc(a.id)}-part" data-k="acc.${i}.part" value="${esc(a.part)}"></label>
-        <label class="field"><span>${wl} (kg)</span><input type="number" inputmode="decimal" step="0.1" min="0" id="acc-${esc(a.id)}-w" data-k="acc.${i}.w" value="${a.w == null ? '' : a.w}" placeholder="생략"></label>
-        <label class="field"><span>1단계 횟수</span><input type="number" inputmode="numeric" min="1" id="acc-${esc(a.id)}-reps" data-k="acc.${i}.reps" value="${a.reps}"></label></div>
-        <div class="row2 pair"><div class="row2"><label class="field"><span>세트</span><input type="number" inputmode="numeric" min="1" id="acc-${esc(a.id)}-sets" data-k="acc.${i}.sets" value="${a.sets}"></label>
-        <label class="field"><span>휴식</span><input type="text" id="acc-${esc(a.id)}-rest" data-k="acc.${i}.rest" value="${esc(a.rest)}"></label></div>
-        <div class="row2"><label class="field"><span>증량 방식</span><select id="acc-${esc(a.id)}-inc" data-k="acc.${i}.inc"><option value="pct" ${a.inc === 'pct' ? 'selected' : ''}>%</option><option value="kg" ${a.inc === 'kg' ? 'selected' : ''}>kg</option></select></label>
-        <label class="field"><span>증량 값</span><input type="number" inputmode="decimal" step="0.5" min="0" id="acc-${esc(a.id)}-incv" data-k="acc.${i}.incV" value="${a.incV}"></label></div></div>
-        <label class="field"><span>기구</span><select id="acc-${esc(a.id)}-equip" data-k="acc.${i}.equip">${equipOpts(a.equip)}</select></label>
-        <label class="check"><input type="checkbox" id="acc-${esc(a.id)}-light" data-k="acc.${i}.light" ${a.light ? 'checked' : ''}><span>저중량 규칙 — 20kg 미만일 때 5·7·9회로 가고 묶음 성공 시 +5kg. 20kg부터는 위 횟수·증량으로 돌아가요.</span></label>
-        <label class="check"><input type="checkbox" id="acc-${esc(a.id)}-sw" data-k="acc.${i}.sw" ${a.sw ? 'checked' : ''}><span>무게가 오르면 바벨 종목으로 바꾸기</span></label>
-        ${a.sw && (sp.acc[a.id] || {}).phase ? `<p class="small">시작 지점 세션에서 이미 ${esc(a.sw.name)}(으)로 바꾼 상태라, 위 무게는 ${esc(a.sw.name)} 무게예요.</p>` : ''}
-        ${a.sw ? `<div class="swbox"><div class="row2"><label class="field"><span>바꾸는 시점 (이 무게가 될 차례에)</span><input type="number" inputmode="decimal" step="0.5" min="0.5" id="acc-${esc(a.id)}-swat" data-k="acc.${i}.sw.at" value="${a.sw.at}"></label>
-          <label class="field"><span>바꿀 종목</span><input type="text" id="acc-${esc(a.id)}-swname" data-k="acc.${i}.sw.name" value="${esc(a.sw.name)}"></label></div>
-          <div class="row3"><label class="field"><span>시작 무게 (kg)</span><input type="number" inputmode="decimal" step="0.5" min="0.5" id="acc-${esc(a.id)}-sww" data-k="acc.${i}.sw.w" value="${a.sw.w}"></label>
-          <label class="field"><span>증량 방식</span><select id="acc-${esc(a.id)}-swinc" data-k="acc.${i}.sw.inc"><option value="pct" ${a.sw.inc === 'pct' ? 'selected' : ''}>%</option><option value="kg" ${a.sw.inc === 'kg' ? 'selected' : ''}>kg</option></select></label>
-          <label class="field"><span>증량 값</span><input type="number" inputmode="decimal" step="0.5" min="0" id="acc-${esc(a.id)}-swincv" data-k="acc.${i}.sw.incV" value="${a.sw.incV}"></label></div></div>` : ''}</div>`;
-    });
-    h += `<div class="btnrow"><button class="btn ghost" type="button" data-act="addAcc" data-day="D">+ 데드 날 종목</button><button class="btn ghost" type="button" data-act="addAcc" data-day="S">+ 스쿼트 날 종목</button></div></div>`;
+        ${cur.no ? `<p class="small">세션 ${cur.no}부터 ${esc(toMode(cur.mode))} 바꿔서 하고 있어요. 무게는 그때 시작한 무게예요.</p>` : ''}
+        ${exForm(x, 'acc-' + a.id, { wLabel: cur.no ? `세션 ${cur.no} 무게` : wl, modeSel: pm && pm.mode, pend: pm && pendBox(a, pm) })}</div>`;
+    }
+    h += `<div class="btnrow"><button class="btn ghost" type="button" data-act="addAcc" data-day="D">+ 데드 날 운동</button><button class="btn ghost" type="button" data-act="addAcc" data-day="S">+ 스쿼트 날 운동</button></div></div>`;
 
     h += `<div class="card"><h2>규칙</h2><ul class="rules">
       <li>한 세션은 운동 6회(데드리프트 날 → 스쿼트 날 번갈아 3회씩). 6번째 운동을 마친 다음 날 하루 쉬어요. 고정으로 쉬는 요일은 없어요.</li>
@@ -939,12 +1079,10 @@
       <li>한 세션(운동 6회)을 하는 동안 2일 이상 쉬었다면 세션 뒤 정식 휴식은 건너뛰어요.</li>
       <li>휴식일에도 운동했다면 기록할 수 있고, 기록하면 운동한 날로 계산해요.</li>
       <li>이미 하던 루틴이면 시작 지점을 그 세션·순서·무게로 옮기고, 그 뒤 지난 날들을 날짜순으로 기록해 이어가요.</li>
-      <li>데드리프트 = 스쿼트 × 1.2. 둘은 한 묶음으로 같이 오르내려요.</li>
-      <li>하체는 세션마다 5%씩 올려 4단계까지 가고, 4단계를 성공하면 그 묶음의 2단계 무게로 내려 새 묶음을 시작해요.</li>
-      <li>하체를 하나라도 실패하면 다음 세션은 한 단계(−5%) 낮춰 다시 하고, 원래 4단계를 채울 때까지 이어가요.</li>
-      <li>상체·팔은 세션마다 1회씩 늘려 3단계(예: 3·4·5회)까지 가고, 하체 4단계 날은 쉬어요. 실패하면 한 단계(−1회) 낮춰요.</li>
-      <li>상체·팔은 3단계를 성공한 뒤 하체가 4단계를 성공하면 다음 세션부터 증량해요. 그 전까지는 마지막 횟수를 유지해요.</li>
-      <li>가슴은 덤벨프레스를 1kg씩 올리다가 10kg(양손 20kg)이 될 차례에 바벨 벤치프레스 20kg으로 바꿔 5%씩 올려요.</li>
+      <li>데드리프트 = 스쿼트 × 1.2. 둘은 한 묶음으로 같이 오르내려요. 하체를 하나라도 실패하면 다음 세션은 한 단계 낮춰 다시 해요.</li>
+      <li>무게 고정 종목은 세션마다 다음 횟수로, 횟수 고정 종목은 세션마다 한 칸 무거운 무게로 가요. 실패하면 한 단계 낮춰 다시 하고, 사다리 끝을 성공하면 다음 세션에 증량해요. 하체가 가장 무거운 단계인 세션은 상체·팔이 쉬어요.</li>
+      <li>바벨·머신·원판 여러 장은 %·kg으로 올리고 원판·무게추 조합을 알려줘요. 덤벨·일체형 바벨·원판 한 장은 가진 무게 중 다음 무게로 올라가요. 고무밴드는 증량 없이 기록만 해요.</li>
+      <li>무게·횟수·세트를 중간에 바꿔도 지난 성공·실패만 보고 지금 설정으로 다음을 계산해요.</li>
     </ul></div>`;
 
     h += `<div class="card"><h2>데이터</h2><p class="small" id="storageNote"></p>
@@ -954,7 +1092,10 @@
         ? '<div class="confirm"><span>모든 기록을 지우고 오늘부터 다시 시작할까요? 설정은 그대로예요.</span><button class="btn danger" type="button" data-act="reset">지우고 다시 시작</button><button class="btn ghost" type="button" data-act="cancelReset">취소</button></div>'
         : '<div class="btnrow"><button class="btn danger" type="button" data-act="askReset">기록 지우고 처음부터</button></div>'}
     </div>`;
-    $('view-settings').innerHTML = h;
+    const view = $('view-settings');
+    const focusId = document.activeElement && view.contains(document.activeElement) ? document.activeElement.id : '';
+    view.innerHTML = h;
+    if (focusId && $(focusId)) $(focusId).focus();
     renderDerived();
     renderSettingsStorage();
   }
@@ -970,6 +1111,83 @@
       : '기록은 이 기기의 브라우저에만 저장돼요. 브라우저 데이터를 지우면 사라지니 가끔 백업을 복사해 두세요.';
   }
 
+  // 시작 전(기록 없음)에는 설정을 바꿔도 "시작"으로 치지 않는다.
+  function save(msg) {
+    if (data.started) { commit(msg); return; }
+    data.updatedAt = Date.now();
+    saveLocal();
+    render();
+    if (msg) toast(msg);
+  }
+
+  // 종목 입력(설정 카드·운동 추가 시트). 구조가 바뀌는 값(훈련방식·진행 방식·증량 방식)은 다시 그린다.
+  function exInput(el) {
+    const box = el.closest('[data-ex]');
+    const draft = box.dataset.ex === 'draft';
+    const a = draft ? sheet && sheet.x : data.cfg.acc.find((x) => x.id === box.dataset.ex);
+    if (!a) return;
+    const seg = draft ? null : curSeg(a).chg;     // 바꾼 훈련방식이 있으면 무게·이름은 그 구간 것
+    const f = el.dataset.f, v = el.value;
+    const back = (msg, val) => { el.value = val; toast(msg); };
+    let redraw = false;
+    if (f === 'name') {
+      const t = v.trim();
+      if (!t) { el.value = (seg && seg.name) || a.name; return; }
+      if (seg) { if (t === a.name) delete seg.name; else seg.name = t; } else a.name = t;
+    } else if (f === 'part' || f === 'rest') a[f] = v.trim();
+    else if (f === 'day') a.day = v === 'S' ? 'S' : 'D';
+    else if (f === 'mode') {
+      if (!L.MODE_KEYS.includes(v)) return;
+      const cur = draft ? { mode: a.mode, w: a.w, name: a.name } : curSeg(a);
+      if (!draft && data.logs.length) {
+        pendingMode = v === cur.mode ? null : { id: a.id, mode: v, w: snapW(v, cur.w), name: cur.name };
+        renderSettings();
+        return;
+      }
+      a.mode = v; a.w = snapW(v, a.w);
+      if (!draft) a.chg = [];
+      if (v === 'band' && !a.bands.length && data.cfg.gear.bands.length) a.bands = [data.cfg.gear.bands[0]];
+      redraw = true;
+    } else if (f === 'w') {
+      const t = seg || a;
+      if (v === '') { if (L.MODES[t.mode].list) return; t.w = null; }
+      else { const n = Number(v); if (!(n > 0)) return back('무게는 0보다 커야 해요. 비우면 생략이에요', t.w == null ? '' : t.w); t.w = n; }
+    } else if (f === 'stack') { a.stack = numList(v); el.value = a.stack.join(', '); redraw = true; }
+    else if (f === 'band') a.bands = [...box.querySelectorAll('[data-f="band"]:checked')].map((i) => i.value);
+    else if (f === 'prog') { a.prog = v === 'r' ? 'r' : 'w'; redraw = true; }
+    else if (f === 'ladder') {
+      const l = numList(v, { int: true, sorted: false, max: 12 });
+      if (!l.length) return back('횟수를 쉼표로 나눠 넣어 주세요 (예: 3, 4, 5)', L.ladderOf(a).join(', '));
+      a.ladder = l; el.value = l.join(', ');
+    } else if (f === 'reps' || f === 'sets') {
+      const n = Math.round(Number(v));
+      if (!(n >= 1)) return back('1 이상의 숫자를 넣어 주세요', a[f]);
+      a[f] = n;
+    } else if (f === 'inc') { a.inc = v === 'kg' ? 'kg' : 'pct'; redraw = true; }
+    else if (f === 'incV') { const n = Number(v); if (v === '' || !(n >= 0)) return back('숫자를 확인해 주세요', a.incV); a.incV = n; }
+    const note = box.querySelector('.prognote');
+    if (note) note.textContent = progNote(Object.assign({}, a, draft ? {} : { mode: curSeg(a).mode }));
+    if (draft) { if (redraw) renderAdd(); return; }
+    save();
+    if (redraw) renderSettings();
+  }
+  // 기록이 있는 종목의 훈련방식 바꾸기 확정: 그 종목의 다음(또는 지금) 세션부터 새 방식·무게로.
+  function confirmMode() {
+    const pm = pendingMode;
+    const a = pm && data.cfg.acc.find((x) => x.id === pm.id);
+    if (!a) { pendingMode = null; renderSettings(); return; }
+    if (L.MODES[pm.mode].list && !(pm.w > 0)) { toast(`설정 → 장비에 ${modeName(pm.mode)} 무게를 먼저 넣어 주세요`); return; }
+    const no = changeNo(a);
+    const c = { no, mode: pm.mode, w: pm.mode === 'band' ? null : pm.w };
+    const name = (pm.name || '').trim();
+    if (name && name !== a.name) c.name = name;
+    a.chg = (a.chg || []).filter((x) => x.no < no).concat(c);
+    if (pm.mode === 'band' && !a.bands.length && data.cfg.gear.bands.length) a.bands = [data.cfg.gear.bands[0]];
+    pendingMode = null;
+    save(`${c.name || a.name} · 세션 ${no}부터 ${toMode(pm.mode)} 해요`);
+    renderSettings();
+  }
+
   function applySetting(el) {
     const k = el.dataset.k;
     const cfg = data.cfg;
@@ -979,54 +1197,113 @@
       const n = Math.max(0, Math.min(PAIR_MAX, Math.floor(Number(el.value)) || 0));
       cfg.plates = cfg.plates.filter((x) => x !== p).concat(Array(n).fill(p)).sort((a, b) => a - b);
       el.closest('label').classList.toggle('on', n > 0);
-    } else if (/^acc\.\d+\.sw\./.test(k)) {
-      const [, i, , f] = k.split('.');
-      const sw = cfg.acc[+i] && cfg.acc[+i].sw;
-      if (!sw) return;
-      if (f === 'name') sw.name = el.value.trim() || sw.name;
-      else if (f === 'inc') sw.inc = el.value === 'kg' ? 'kg' : 'pct';
-      else {
-        const v = num(el.value);
-        if (!(f === 'incV' ? v >= 0 : v > 0)) { el.value = sw[f]; toast('숫자를 확인해 주세요'); return; }
-        sw[f] = v;
-      }
+    } else if (k.startsWith('gear.')) {
+      const g = k.slice(5);
+      const l = numList(el.value);
+      if (!l.length) { el.value = cfg.gear[g].join(', '); toast('무게를 하나 이상 쉼표로 나눠 넣어 주세요'); return; }
+      cfg.gear[g] = l;
+      el.value = l.join(', ');
+      save();
+      renderSettings();
+      return;
+    } else if (k.startsWith('band.')) {
+      const i = Number(k.slice(5));
+      const old = cfg.gear.bands[i];
+      const t = el.value.trim();
+      if (!t || cfg.gear.bands.some((n, j) => j !== i && n === t)) { el.value = old; toast(t ? '같은 이름의 밴드가 있어요' : '밴드 이름을 넣어 주세요'); return; }
+      cfg.gear.bands[i] = t;
+      for (const a of cfg.acc) a.bands = a.bands.map((n) => (n === old ? t : n));
+      save();
+      renderSettings();
+      return;
     } else if (k.startsWith('main.')) {
       const f = k.slice(5);
       if (f === 'rest') cfg.main.rest = el.value.trim();
-      else {
+      else if (f === 'prog') { cfg.main.prog = el.value === 'w' ? 'w' : 'r'; save(); renderSettings(); return; }
+      else if (f === 'ladder') {
+        const l = numList(el.value, { int: true, sorted: false, max: 12 });
+        if (!l.length) { el.value = L.ladderOf(cfg.main).join(', '); toast('횟수를 쉼표로 나눠 넣어 주세요 (예: 3, 4, 5)'); return; }
+        cfg.main.ladder = l; el.value = l.join(', ');
+        save(); renderSettings(); return;
+      } else {
         const v = num(el.value);
         if (!(v > 0)) { el.value = cfg.main[f]; toast('0보다 큰 숫자를 넣어 주세요'); return; }
         cfg.main[f] = f === 'dl' ? v : Math.round(v);
       }
-    } else if (k.startsWith('acc.')) {
-      const [, i, f] = k.split('.');
-      const a = cfg.acc[+i];
-      if (!a) return;
-      if (f === 'name') a.name = el.value.trim() || a.name;
-      else if (f === 'part' || f === 'rest') a[f] = el.value.trim();
-      else if (f === 'inc') a.inc = el.value === 'kg' ? 'kg' : 'pct';
-      else if (f === 'equip') a.equip = ['barbell', 'machine', 'dumbbell'].includes(el.value) ? el.value : 'dumbbell';
-      else if (f === 'light') a.light = el.checked;
-      else if (f === 'sw') {
-        a.sw = el.checked ? { at: a.w != null ? a.w + 3 : 10, name: '바벨 종목', w: 20, inc: 'pct', incV: 5 } : null;
-        renderDerived(); commit(); renderSettings();
-        const box = $(`acc-${a.id}-sw`);
-        if (box) box.focus();
-        return;
-      }
-      else if (f === 'w') {
-        const v = num(el.value);
-        if (el.value !== '' && !(v > 0)) { el.value = a.w == null ? '' : a.w; toast('무게는 0보다 커야 해요. 비우면 생략이에요'); return; }
-        a.w = el.value === '' ? null : v;
-      } else {
-        const v = num(el.value);
-        const ok = f === 'incV' ? v >= 0 : v >= 1;
-        if (!ok) { el.value = a[f]; toast('숫자를 확인해 주세요'); return; }
-        a[f] = f === 'incV' ? v : Math.round(v);
-      }
     }
     renderDerived();
-    commit();
+    save();
+  }
+
+  // ---------- 운동 추가 (처음 고를 때 · 설정) ----------
+  const PRESETS = L.CATALOG.concat(L.EXTRA);
+  function draftEx(preset, day) {
+    const base = preset ? JSON.parse(JSON.stringify(preset))
+      : { name: '', part: '', mode: 'dumbbell', w: null, prog: 'w', reps: 8, ladder: [8, 10, 12], sets: 3, rest: '2분', inc: 'kg', incV: 1 };
+    const x = Object.assign({ stack: [], bands: [] }, base, { day: day || base.day || 'D' });
+    delete x.id;
+    x.w = snapW(x.mode, x.w);
+    if (x.mode === 'band' && !x.bands.length && data.cfg.gear.bands.length) x.bands = [data.cfg.gear.bands[0]];
+    return x;
+  }
+  function openAdd(day) {
+    sheet = { kind: 'add', pick: '', x: draftEx(null, day), err: '', opener: document.activeElement };
+    $('sheet').hidden = false;
+    renderAdd();
+    const first = $('ad-pick');
+    if (first) first.focus();
+  }
+  function renderAdd() {
+    const x = sheet.x;
+    const no = data.started ? model(weekMon + 6).cur.no : 0;
+    const have = new Set(data.cfg.acc.map((a) => a.name));
+    let h = `<div><h2 id="sheetTitle">운동 추가</h2><div class="sub">${no ? `지금 세션(${no})부터 들어가요` : '처음부터 들어가요'}</div></div>
+      <label class="field"><span>운동 고르기</span><select id="ad-pick" data-addpick="1"><option value="">직접 입력</option>${PRESETS.map((p) => `<option value="${esc(p.id)}" ${sheet.pick === p.id ? 'selected' : ''}>${esc(p.name)} · ${esc(modeName(p.mode))}${have.has(p.name) ? ' (이미 있음)' : ''}</option>`).join('')}</select></label>
+      <div class="exform" data-ex="draft">
+        <div class="row2"><label class="field"><span>이름</span><input type="text" id="ad-name" data-f="name" value="${esc(x.name)}" placeholder="예: 바벨 컬"></label>
+        <label class="field"><span>하는 날</span><select id="ad-day" data-f="day"><option value="D" ${x.day === 'D' ? 'selected' : ''}>데드리프트 날</option><option value="S" ${x.day === 'S' ? 'selected' : ''}>스쿼트 날</option></select></label></div>
+        ${exForm(x, 'ad')}
+      </div>
+      ${sheet.err ? `<p class="small err" role="alert">${esc(sheet.err)}</p>` : ''}
+      <button class="btn block" type="button" data-act="addSave">추가하기</button>
+      <button class="btn ghost" type="button" data-act="close">닫기</button>`;
+    const panel = $('panel');
+    const top = panel.scrollTop;
+    const focusId = document.activeElement && panel.contains(document.activeElement) ? document.activeElement.id : '';
+    panel.innerHTML = h;
+    panel.scrollTop = top;
+    if (focusId && $(focusId)) $(focusId).focus();
+  }
+  function addSave() {
+    const x = sheet.x;
+    const fail = (msg) => { sheet.err = msg; renderAdd(); };
+    if (!x.name.trim()) return fail('이름을 넣어 주세요.');
+    if (L.MODES[x.mode].list && !(x.w > 0)) return fail(`설정 → 장비에 ${modeName(x.mode)} 무게를 먼저 넣어 주세요.`);
+    const used = new Set(data.cfg.acc.map((a) => a.id));
+    // 기록이 있으면 예전에 지운 종목의 기록이 다시 붙지 않도록 새 id를 쓴다.
+    const id = sheet.pick && !used.has(sheet.pick) && !data.logs.length ? sheet.pick : 'x' + Date.now().toString(36);
+    const no = data.started ? model(weekMon + 6).cur.no : 1;
+    const a = sanitizeAcc(Object.assign({}, x, { id, name: x.name.trim(), from: no, chg: [] }));
+    data.cfg.acc.push(a);
+    closeSheet();
+    save(data.started ? `${a.name} · 세션 ${no}부터 들어가요` : `${a.name} · ${TYPE_NAME[a.day]} 날에 넣었어요`);
+    if (tab === 'settings') renderSettings();
+  }
+  // 처음 시작 전: 요일별로 할 운동을 빼고 더한다 (이미 시작한 사람에게는 보이지 않는다).
+  function renderPick() {
+    const el = $('pick');
+    if (!el) return;
+    if (data.started) { el.innerHTML = ''; return; }
+    let h = '<div class="pickhead"><strong>요일별 운동 고르기</strong><span class="small">데드리프트 날·스쿼트 날에 같이 할 운동을 빼거나 더하세요. 무게·훈련방식은 설정에서 자세히 바꿀 수 있어요.</span></div><div class="pickdays">';
+    for (const day of ['D', 'S']) {
+      h += `<div class="pickday"><div class="pickdayhead"><span class="tag ${day}">${TYPE_NAME[day]} 날</span></div><ul>
+        <li class="fixed"><span>${TYPE_NAME[day]}<span class="small"> · 하체 메인</span></span></li>`;
+      for (const a of data.cfg.acc.filter((x) => x.day === day)) {
+        h += `<li><span>${esc(a.name)}<span class="small"> · ${esc(modeName(a.mode))}</span></span><button class="iconbtn sm" type="button" data-act="pickDel" data-id="${esc(a.id)}" aria-label="${esc(a.name)} 빼기">×</button></li>`;
+      }
+      h += `</ul><button class="btn ghost" type="button" data-act="addAcc" data-day="${day}">+ ${TYPE_NAME[day]} 날 운동 추가</button></div>`;
+    }
+    el.innerHTML = h + '</div>';
   }
 
   // ---------- 알림 ----------
@@ -1080,15 +1357,30 @@
     else if (act === 'askDel') { sheet.confirmDel = true; renderSheet(model(weekMon + 6)); }
     else if (act === 'keepLog') { sheet.confirmDel = false; renderSheet(model(weekMon + 6)); }
     else if (act === 'delLog') { data.logs.pop(); closeSheet(); commit('기록을 지웠어요'); }
-    else if (act === 'addAcc') {
-      const no = model(weekMon + 6).cur.no;
-      data.cfg.acc.push({ id: 'x' + Date.now().toString(36), name: '새 종목', part: '', day: b.dataset.day, equip: 'dumbbell', w: 5, reps: 5, sets: 3, rest: '2분', inc: 'kg', incV: 1, light: false, from: no, sw: null });
-      commit(`세션 ${no}부터 들어가요`); renderSettings();
+    else if (act === 'addAcc') openAdd(b.dataset.day);
+    else if (act === 'addSave') addSave();
+    else if (act === 'pickDel') { const a = data.cfg.acc.find((x) => x.id === b.dataset.id); data.cfg.acc = data.cfg.acc.filter((x) => x.id !== b.dataset.id); save(a ? `${josa(a.name, '을', '를')} 뺐어요` : ''); }
+    else if (act === 'pmOk') confirmMode();
+    else if (act === 'pmCancel') { pendingMode = null; renderSettings(); }
+    else if (act === 'addBand') {
+      const names = data.cfg.gear.bands;
+      let n = names.length + 1;
+      while (names.includes(`${n}번밴드`)) n++;
+      names.push(`${n}번밴드`);
+      save(`${n}번밴드를 추가했어요`); renderSettings();
+      const el = $(`set-band-${names.length - 1}`); if (el) el.focus();
+    } else if (act === 'delBand') {
+      const name = data.cfg.gear.bands[Number(b.dataset.i)];
+      if (name == null) return;
+      data.cfg.gear.bands = data.cfg.gear.bands.filter((n) => n !== name);
+      for (const a of data.cfg.acc) a.bands = a.bands.filter((n) => n !== name);
+      save(`${josa(name, '을', '를')} 뺐어요. 지난 기록에는 남아 있어요`); renderSettings();
     } else if (act === 'delAcc') {
       const id = b.dataset.id;
       if (pendingDel !== id) { pendingDel = id; renderSettings(); return; }
       data.cfg.acc = data.cfg.acc.filter((a) => a.id !== id);
-      pendingDel = null; commit('종목을 지웠어요'); renderSettings();
+      if (pendingMode && pendingMode.id === id) pendingMode = null;
+      pendingDel = null; save('종목을 지웠어요'); renderSettings();
     } else if (act === 'copyBackup') {
       const text = JSON.stringify(data);
       const box = $('backupBox');
@@ -1103,6 +1395,8 @@
     else if (act === 'cancelReset') { confirmReset = false; renderSettings(); }
     else if (act === 'reset') {
       data.logs = []; data.cfg.startDate = today; confirmReset = false;
+      // 기록 중에 바꾼 훈련방식은 지금 방식을 처음 설정으로 삼는다.
+      for (const a of data.cfg.acc) { const c = curSeg(a); if (c.no) Object.assign(a, { mode: c.mode, w: c.w, name: c.name, chg: [] }); }
       weekMon = L.mondayOf(L.toNum(today));
       commit('기록을 지우고 오늘부터 다시 시작해요'); renderSettings();
     }
@@ -1111,6 +1405,9 @@
     const t = ev.target;
     if (!t.dataset) return;
     if (t.dataset.sk) { if (sheet && sheet.kind === 'start') startInput(t, true); }
+    else if (t.dataset.f && t.closest('[data-ex]')) exInput(t);
+    else if (t.dataset.pm && pendingMode) { if (t.dataset.pm === 'name') pendingMode.name = t.value; else pendingMode.w = t.value === '' ? null : Number(t.value) > 0 ? Number(t.value) : pendingMode.w; }
+    else if (t.dataset.addpick && sheet && sheet.kind === 'add') { sheet.pick = t.value; sheet.x = draftEx(PRESETS.find((x) => x.id === t.value) || null, sheet.x.day); sheet.err = ''; renderAdd(); }
     else if (t.dataset.k) applySetting(t);
   });
   document.addEventListener('input', (ev) => { const t = ev.target; if (t.dataset && t.dataset.sk && sheet && sheet.kind === 'start') startInput(t, false); });

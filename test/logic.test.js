@@ -38,23 +38,22 @@ test('이번 주: 월화 비움, 수요일부터 데드·스쿼트 번갈아, �
 test('첫 세션 처방이 요청한 숫자와 같다', () => {
   const c = cfg();
   const [s1] = L.replay(c, []);
-  const D = L.dayRows(c, s1.presc, 'D').map((r) => [r.name, L.fmtW(r), r.reps, r.sets, r.rest]);
-  const S = L.dayRows(c, s1.presc, 'S').map((r) => [r.name, L.fmtW(r), r.reps, r.sets, r.rest]);
+  const D = L.dayRows(c, s1.presc, 'D').map((r) => [r.name, L.fmtW(r), r.reps, r.sets, r.rest, r.mode]);
+  const S = L.dayRows(c, s1.presc, 'S').map((r) => [r.name, L.fmtW(r), r.reps, r.sets, r.rest, r.mode]);
   assert.deepEqual(D, [
-    ['데드리프트', '40kg', 5, 3, '5~8분'],
-    ['랫풀다운', '23kg', 3, 3, '3~5분'],
-    ['덤벨컬', '3kg', 5, 3, '2분'],
-    ['OHP', '10kg', 5, 3, '3~5분'],
+    ['데드리프트', '40kg', 5, 3, '5~8분', 'barbell'],
+    ['랫풀다운', '23kg', 3, 3, '3~5분', 'stack'],
+    ['덤벨컬', '3kg', 5, 3, '2분', 'dumbbell'],
+    ['OHP', '10kg', 5, 3, '3~5분', 'fixedbar'],
   ]);
   assert.deepEqual(S, [
-    ['스쿼트', '33.3kg', 5, 3, '5~8분'],
-    ['덤벨프레스', '7kg', 3, 3, '3~5분'],
-    ['케이블 트라이셉스 익스텐션', '—', 5, 3, '2분'],
-    ['사이드 레터럴 레이즈', '2kg', 10, 3, '1분'],
-    ['벤트오버 레터럴 레이즈', '2kg', 10, 3, '1분'],
+    ['스쿼트', '33.3kg', 5, 3, '5~8분', 'barbell'],
+    ['덤벨프레스', '7kg', 3, 3, '3~5분', 'dumbbell'],
+    ['머신 트라이셉스 익스텐션', '—', 5, 3, '2분', 'stack'],
+    ['사이드 레터럴 레이즈', '2kg', 10, 3, '1분', 'dumbbell'],
+    ['벤트오버 레터럴 레이즈', '2kg', 10, 3, '1분', 'dumbbell'],
   ]);
 });
-
 test('하체: 4세션까지 5%씩, 5세션은 2세션 무게, 9세션은 6세션 무게', () => {
   const { sessions } = run(Array(9).fill({}));
   const dl = sessions.map((s) => r1(s.presc.main.dl));
@@ -79,37 +78,37 @@ test('상체: 3·4·5회, 4세션 휴식, 하체 묶음 성공 후 증량 (등 5
   assert.deepEqual(sessions.map((s) => accCell(s, 'side')), ['2x10', '2x11', '2x12', '휴식', '3x10', '3x11']);
 });
 
-test('가슴: 덤벨프레스 7kg부터 1kg씩, 10kg이 될 차례에 바벨 벤치프레스 20kg으로 바꾸고 5% 증량', () => {
-  const { c, sessions } = run(Array(16).fill({}));
-  const press = sessions.map((s) => accCell(s, 'press'));
-  assert.deepEqual(press, ['7x3', '7x4', '7x5', '휴식', '8x3', '8x4', '8x5', '휴식', '9x3', '9x4', '9x5', '휴식', '20x3', '20x4', '20x5', '휴식', '21x3']);
-  const before = L.dayRows(c, sessions[8].presc, 'S').find((r) => r.id === 'press');
-  const after = L.dayRows(c, sessions[12].presc, 'S').find((r) => r.id === 'press');
-  assert.deepEqual([before.name, before.equip], ['덤벨프레스', 'dumbbell']);
-  assert.deepEqual([after.name, after.equip], ['바벨 벤치프레스', 'barbell']);
+test('덤벨·일체형 바벨은 가진 무게 목록 안에서 다음 무게로 (2kg 다음이 4kg이면 4kg), 끝이면 그대로', () => {
+  const { sessions } = run(Array(16).fill({}));
+  assert.deepEqual(sessions.map((s) => accCell(s, 'press')).slice(12), ['10x3', '10x4', '10x5', '휴식', '12x3']);
+  const c = cfg();
+  c.gear.db = [2, 4, 6];
+  c.gear.bars = [10, 15];
+  const s = L.toNum(TODAY);
+  const logs = Array.from({ length: 6 * 12 }, (_, i) => ({ d: L.toStr(s + i + Math.floor(i / 6)), res: {} }));
+  const ss = L.replay(c, logs);
+  assert.deepEqual(ss.map((x) => accCell(x, 'side')), ['2x10', '2x11', '2x12', '휴식', '4x10', '4x11', '4x12', '휴식', '6x10', '6x11', '6x12', '휴식', '6x10']);
+  assert.deepEqual(ss.map((x) => accCell(x, 'ohp')).slice(4, 9), ['15x5', '15x7', '15x9', '휴식', '15x5']);
+  assert.equal(ss[8].presc.acc.ohp.maxed, true);
+  assert.match(L.loadInfo(L.dayRows(c, ss[8].presc, 'D').find((r) => r.id === 'ohp'), c).text, /가장 무거워요/);
 });
-
-test('상체 실패: -1회로 돌아가 5회 묶음을 완성, 하체와 독립', () => {
+test('상체 실패: 한 단계(-1회) 낮춰 다시, 사다리 끝을 성공하면 다음 세션 증량 (하체 묶음과 따로)', () => {
   const { sessions } = run([{}, { lat: false }, {}, {}, {}, {}, {}, {}, {}]);
-  assert.deepEqual(sessions.map((s) => accCell(s, 'lat')), ['23x3', '23x4', '23x3', '휴식', '23x4', '23x5', '23x5', '휴식', '24.2x3', '24.2x4']);
-  assert.equal(sessions[6].presc.acc.lat.hold, true);
+  assert.deepEqual(sessions.map((s) => accCell(s, 'lat')), ['23x3', '23x4', '23x3', '휴식', '23x4', '23x5', '24.2x3', '휴식', '24.2x4', '24.2x5']);
+  assert.equal(sessions[2].presc.acc.lat.retry, true);
   assert.deepEqual(sessions.slice(0, 5).map((s) => r1(s.presc.main.dl)), [40, 42, 44.1, 46.3, 42]);
 });
-
-test('저중량 규칙: OHP 10kg → 5·7·9회, 묶음 성공 시 +5kg, 20kg부터 3·4·5회와 5%', () => {
+test('OHP 일체형 바벨 10kg → 5·7·9회, 사다리 끝 성공 후 다음 바벨(15·20·25kg)', () => {
   const { sessions } = run(Array(12).fill({}));
-  assert.deepEqual(sessions.map((s) => accCell(s, 'ohp')), ['10x5', '10x7', '10x9', '휴식', '15x5', '15x7', '15x9', '휴식', '20x3', '20x4', '20x5', '휴식', '21x3']);
+  assert.deepEqual(sessions.map((s) => accCell(s, 'ohp')), ['10x5', '10x7', '10x9', '휴식', '15x5', '15x7', '15x9', '휴식', '20x5', '20x7', '20x9', '휴식', '25x5']);
 });
-
-test('하체 4세션 실패 시 상체는 증량하지 않고 유지', () => {
+test('하체 4세션 실패: 하체는 재도전, 상체는 자기 사다리대로 (이미 끝낸 종목은 증량)', () => {
   const { sessions } = run([{}, {}, {}, { dl: false }, {}, {}]);
   assert.equal(r1(sessions[4].presc.main.dl), 44.1);
-  assert.deepEqual([sessions[4].presc.acc.lat.w, sessions[4].presc.acc.lat.reps, sessions[4].presc.acc.lat.hold], [23, 5, true]);
+  assert.equal(sessions[4].presc.main.retry, true);
+  assert.deepEqual([r1(sessions[4].presc.acc.lat.w), sessions[4].presc.acc.lat.reps], [24.2, 3]);
   assert.equal(sessions[5].presc.acc.lat.skip, true);
-  assert.equal(r1(sessions[6].presc.acc.lat.w), 24.2);
-  assert.equal(r1(sessions[6].presc.main.dl), 42);
 });
-
 test('무게 생략 종목은 증량분을 상대값으로 표시', () => {
   const { c, sessions } = run(Array(4).fill({}));
   const row = L.dayRows(c, sessions[4].presc, 'S').find((r) => r.id === 'tri');
@@ -152,7 +151,7 @@ test('이어서 시작: 수요일에 세션 6 첫 운동(데드리프트)을 했
   const sessions = L.replay(c, logs);
   assert.deepEqual(sessions.map((s) => [s.no, r1(s.presc.main.dl), s.presc.main.stage]), [[6, 44.1, 2], [7, 46.3, 3], [8, 48.6, 4], [9, 44.1, 1], [10, 46.3, 2]]);
   assert.deepEqual(sessions.map((s) => accCell(s, 'lat')), ['24.2x4', '24.2x5', '휴식', '25.4x3', '25.4x4']);
-  assert.deepEqual(sessions.map((s) => accCell(s, 'ohp')), ['15x7', '15x9', '휴식', '20x3', '20x4']);
+  assert.deepEqual(sessions.map((s) => accCell(s, 'ohp')), ['15x7', '15x9', '휴식', '20x5', '20x7']);
 });
 
 test('이어서 시작: 세션 중간(4번째 운동, 스쿼트)부터면 남은 3번만 채우고 다음 날 휴식', () => {
@@ -168,28 +167,25 @@ test('이어서 시작: 세션 중간(4번째 운동, 스쿼트)부터면 남은
   assert.deepEqual([sessions[1].presc.main.stage, sessions[1].presc.main.retry], [2, true]); // 데드 실패 → 한 단계 낮춰 재도전
 });
 
-test('이어서 시작: 하체 4단계 세션부터면 상체는 쉬고, 성공하면 묶음 2단계 무게로 내려 상체 증량', () => {
+test('이어서 시작: 하체 4단계 세션부터면 상체는 쉬고, 다음 세션은 넣은 무게의 첫 칸부터', () => {
   const c = cfg();
   c.from = { no: 4, k: 0, stage: 4, acc: {} };
   c.main.dl = 46.3;
+  const p = L.projectTo(cfg(), 4);
+  for (const a of c.acc) { const s = p.state.acc[a.id]; a.w = s.w == null ? null : r1(s.w); }
   const sessions = L.replay(c, Array.from({ length: 6 }, (_, i) => ({ d: L.toStr(L.toNum(TODAY) + i), res: {} })));
   assert.equal(sessions[0].presc.acc.lat.skip, true);
   assert.deepEqual([sessions[1].no, r1(sessions[1].presc.main.dl), sessions[1].presc.main.bundle], [5, 42, 2]);
   assert.deepEqual(['lat', 'curl', 'ohp', 'side'].map((id) => accCell(sessions[1], id)), ['24.2x3', '4x5', '15x5', '3x10']);
 });
-
-test('이어서 시작: 상체 횟수 단계·벤치프레스 전환 상태를 따로 정할 수 있다', () => {
-  const p = L.projectTo(cfg(), 13);
-  assert.deepEqual([p.state.acc.press.phase, p.state.acc.press.w, p.presc.acc.press.name], [1, 20, '바벨 벤치프레스']);
+test('이어서 시작: 상체 횟수 단계를 따로 정할 수 있다', () => {
   const c = cfg();
-  c.from = { no: 13, k: 1, stage: 1, acc: { press: { step: 0, phase: 1 }, lat: { step: -1 } } };
-  c.acc.find((a) => a.id === 'press').w = 20;
+  c.from = { no: 13, k: 1, stage: 1, acc: { press: { step: 2 }, lat: { step: -1 } } };
   const [s] = L.replay(c, []);
   const press = L.dayRows(c, s.presc, 'S').find((r) => r.id === 'press');
-  assert.deepEqual([press.name, press.equip, press.w, press.reps], ['바벨 벤치프레스', 'barbell', 20, 3]);
+  assert.deepEqual([press.name, press.mode, press.w, press.reps], ['덤벨프레스', 'dumbbell', 7, 5]);
   assert.equal(s.presc.acc.lat.reps, 2);
 });
-
 test('지난 날 기록: 마지막 기록 뒤의 지난 날은 차례로 넣고, 지나간 휴식일도 운동했다면 기록할 수 있다', () => {
   const c = cfg();
   c.startDate = '2026-10-05';
@@ -217,9 +213,9 @@ test('경량원판: 5kg 단위 + 나머지를 가진 원판으로 채우기 (요
   assert.equal(t(46, [1.25]), '45kg + 1.25kg 한 짝(한쪽만) → 46.25kg');
   assert.equal(t(48, [1.25]), '45kg + 한쪽 2.5kg · 반대쪽 1.25kg → 48.75kg');
   assert.equal(t(48, [0.5, 1]), '45kg + 1kg 한 쌍 + 0.5kg 한 쌍');
-  assert.equal(t(46, [0.5, 1], 'machine'), '45kg + 1kg 한 짝');               // 기구는 한 짝을 추에 올림
+  assert.equal(t(46, [0.5, 1], 'machine'), '45kg + 1kg 한 장');               // 기구는 한 장을 추에 올림
   assert.equal(L.plateMath(46, [0.5, 1], 'machine').unbalanced, false);
-  assert.equal(t(23, [0.5, 1], 'machine'), '20kg + 2.5kg 한 짝 + 0.5kg 한 짝');
+  assert.equal(t(23, [0.5, 1], 'machine'), '20kg + 2.5kg 한 장 + 0.5kg 한 장');
   assert.equal(t(49.6, [0.5, 1]), '50kg으로 맞추기');
   assert.equal(t(46.3, [0.5, 1]), '45kg + 한쪽 1kg · 반대쪽 0.5kg → 46.5kg');
   assert.equal(L.plateMath(9, [0.5, 1], 'dumbbell'), null);
@@ -228,34 +224,49 @@ test('경량원판: 5kg 단위 + 나머지를 가진 원판으로 채우기 (요
   assert.equal(t(47, [0.5, 0.5]), '45kg + 0.5kg 2쌍');
   assert.equal(t(49, [1, 1]), '45kg + 1kg 2쌍');
   assert.equal(t(48, [1, 1]), '45kg + 한쪽 1kg×2 · 반대쪽 1kg');
-  assert.equal(t(48, [1, 1], 'machine'), '45kg + 1kg 3짝');
+  assert.equal(t(48, [1, 1], 'machine'), '45kg + 1kg 3장');
   assert.equal(t(49, [0.25, 0.25, 0.25, 0.25, 0.25]), '45kg + 한쪽 2.5kg · 반대쪽 0.25kg×6');
   // 2.5kg 한 짝은 경량원판이 1.25kg뿐일 때만 (바벨). 머신은 추에 올리므로 늘 허용.
   // 2.5kg 한 짝은 가진 경량원판과 상관없이 쓸 수 있다 (무게 차이를 줄이려고)
   assert.equal(t(46, []), '45kg + 2.5kg 한 짝(한쪽만) → 47.5kg');
   assert.equal(t(47.5, [1]), '45kg + 2.5kg 한 짝(한쪽만)');
-  assert.equal(t(47.5, [], 'machine'), '45kg + 2.5kg 한 짝');
+  assert.equal(t(47.5, [], 'machine'), '45kg + 2.5kg 한 장');
 });
 
 test('예전 설정(첫 판)을 새 규칙으로 옮긴다', () => {
   const old = cfg();
-  delete old.cv; delete old.plates;
+  delete old.cv; delete old.plates; delete old.gear;
   old.trainDays = [1, 2, 3, 4, 5, 6]; old.roundTo = 0.1;
-  for (const a of old.acc) { delete a.equip; delete a.sw; if (['press', 'side', 'rear'].includes(a.id)) { a.inc = 'pct'; a.incV = 5; } }
+  for (const a of old.acc) { delete a.mode; delete a.prog; delete a.ladder; }
   const m = L.migrate(old);
-  assert.equal(m.cv, 2);
+  assert.equal(m.cv, 3);
   assert.equal(m.trainDays, undefined);
   assert.deepEqual(m.plates, [0.5, 1]);
-  const press = m.acc.find((a) => a.id === 'press');
-  assert.deepEqual([press.inc, press.incV, press.sw.name, press.equip], ['kg', 1, '바벨 벤치프레스', 'dumbbell']);
-  assert.equal(m.acc.find((a) => a.id === 'side').inc, 'kg');
-  // 시작 지점(from)이 없는 예전 설정은 세션 1의 첫 운동부터로 본다
+  assert.deepEqual(m.acc.find((a) => a.id === 'lat').ladder, [3, 4, 5]);
   delete m.from;
   const logs = sessionLogs(L.toNum(TODAY));
   assert.deepEqual(L.replay(m, logs).map((s) => [s.no, s.first, r1(s.presc.main.dl)]), [[1, 0, 40], [2, 0, 42]]);
   assert.equal(L.timeline(m, logs, TODAY).days.get(L.toNum(TODAY)).slot, 0);
 });
 
+test('둘째 판 설정: 저중량 OHP → 일체형 바벨 5·7·9회, 케이블 → 머신 무게추·이름 변경, 자동 전환 없앰', () => {
+  const v2 = {
+    cv: 2, startDate: TODAY, from: { no: 1, k: 0, stage: 1, acc: {} }, plates: [1.25],
+    main: { dl: 40, ratio: 1.2, pct: 5, reps: 5, sets: 3, rest: '5~8분' },
+    acc: [
+      { id: 'ohp', name: 'OHP', part: '어깨', day: 'D', equip: 'barbell', w: 10, reps: 3, sets: 3, rest: '', inc: 'pct', incV: 5, light: true, from: 1, sw: null },
+      { id: 'press', name: '덤벨프레스', part: '가슴', day: 'S', equip: 'dumbbell', w: 7, reps: 3, sets: 3, rest: '', inc: 'kg', incV: 1, light: false, from: 1, sw: { at: 10, name: '바벨 벤치프레스', w: 20, inc: 'pct', incV: 5 } },
+      { id: 'tri', name: '케이블 트라이셉스 익스텐션', part: '삼두', day: 'S', equip: 'machine', w: null, reps: 5, sets: 3, rest: '', inc: 'kg', incV: 1, light: false, from: 1, sw: null },
+    ],
+  };
+  const m = L.migrate(v2);
+  const by = (id) => m.acc.find((a) => a.id === id);
+  assert.deepEqual([by('ohp').mode, by('ohp').ladder], ['fixedbar', [5, 7, 9]]);
+  assert.deepEqual([by('press').mode, by('press').sw, by('press').ladder], ['dumbbell', undefined, [3, 4, 5]]);
+  assert.deepEqual([by('tri').mode, by('tri').name], ['stack', '머신 트라이셉스 익스텐션']);
+  assert.deepEqual(m.main.prog, 'r');
+  assert.ok(m.gear.db.length && m.gear.bands.length === 3);
+});
 // ---------- 일부만 기록 · 밀림 · 휴식 ----------
 const ALL_D = { dl: true, lat: true, curl: true, ohp: true };
 const ALL_S = { sq: true, press: true, tri: true, side: true, rear: true };
@@ -328,4 +339,93 @@ test('밀린 종목도 세션 결과·증량 규칙은 그대로: 4단계 세션
   const v = (no) => sim.view(no).acc.press;
   assert.deepEqual([1, 2, 3, 4, 5, 6].map((no) => (v(no).skip ? '휴식' : `${v(no).w}x${v(no).reps}`)), ['7x3', '7x4', '7x5', '휴식', '8x3', '8x4']);
   assert.deepEqual([1, 2, 3, 4, 5].map((no) => r1(sim.view(no).main.dl)), [40, 42, 44.1, 46.3, 42]);
+});
+
+// ---------- 훈련방식 · 진행 방식 ----------
+const days = (n, res = {}) => Array.from({ length: n }, (_, i) => ({ d: L.toStr(L.toNum(TODAY) + i + Math.floor(i / 6)), res }));
+
+test('머신 무게추: 20kg에서 5% → 21kg이면 무게추 20kg + 1.25kg 한 장, 다음 추가 더 가까우면 그 추', () => {
+  const st = [20, 23, 26, 29];
+  assert.equal(L.stackText(L.stackMath(21, st, [1.25])), '무게추 20kg에 꽂고 그 위에 1.25kg 한 장 올리기 → 21.25kg');
+  assert.equal(L.stackText(L.stackMath(22.6, st, [1.25])), '무게추 23kg에 꽂기 (목표 22.6kg)');
+  assert.equal(L.stackText(L.stackMath(23, st, [1.25])), '무게추 23kg에 꽂기');
+  assert.equal(L.stackText(L.stackMath(24.5, st, [0.5, 1])), '무게추 23kg에 꽂고 그 위에 1kg 한 장 + 0.5kg 한 장 올리기 → 24.5kg');
+  assert.match(L.stackText(L.stackMath(40, st, [1.25])), /가장 무거운 29kg/);
+  const c = cfg();
+  const lat = c.acc.find((a) => a.id === 'lat');
+  lat.w = 20; lat.stack = st;
+  const ss = L.replay(c, days(30));
+  const row = L.dayRows(c, ss[4].presc, 'D').find((r) => r.id === 'lat');
+  assert.equal(r1(row.w), 21);
+  assert.deepEqual(L.loadInfo(row, c), { label: '머신', text: '무게추 20kg에 꽂고 그 위에 1.25kg 한 장 올리기 → 21.25kg' });
+});
+
+test('원판 여러 장(중량 풀업)은 큰 원판 + 경량원판을 매달고, 원판 한 장은 가진 원판 무게 안에서', () => {
+  assert.equal(L.chainText(26, [1.25]), '20kg 한 장 + 5kg 한 장 + 1.25kg 한 장 매달기 → 26.25kg');
+  assert.equal(L.chainText(7.5, [1.25]), '5kg 한 장 + 2.5kg 한 장 매달기');
+  const c = cfg();
+  c.acc.push(L.accDefaults(L.EXTRA.find((x) => x.id === 'lying')));
+  c.gear.one = [5, 10, 15];
+  const ss = L.replay(c, days(30));
+  assert.deepEqual(ss.map((s) => accCell(s, 'lying')).slice(0, 6), ['5x8', '5x10', '5x12', '휴식', '10x8', '10x10']);
+});
+
+test('횟수 고정 보조 종목: 횟수는 그대로, 무게가 3단계(기본·+1칸·+2칸) 오르고 끝나면 +1칸부터 새 묶음', () => {
+  const c = cfg();
+  const curl = c.acc.find((a) => a.id === 'curl');
+  curl.prog = 'r'; curl.reps = 8;
+  const ss = L.replay(c, days(42));
+  assert.deepEqual(ss.map((s) => accCell(s, 'curl')), ['3x8', '4x8', '5x8', '휴식', '4x8', '5x8', '6x8', '휴식']);
+  const lat = c.acc.find((a) => a.id === 'lat');
+  lat.prog = 'r'; lat.reps = 5;
+  const s2 = L.replay(c, days(12));
+  assert.deepEqual(s2.map((s) => accCell(s, 'lat')), ['23x5', '24.2x5', '25.4x5']);
+});
+
+test('무게 고정 사다리 길이는 설정대로 (3·4·5·6회면 6회를 성공한 다음 세션에 증량)', () => {
+  const c = cfg();
+  c.acc.find((a) => a.id === 'press').ladder = [3, 4, 5, 6];
+  const ss = L.replay(c, days(48));
+  assert.deepEqual(ss.map((s) => accCell(s, 'press')), ['7x3', '7x4', '7x5', '휴식', '7x6', '8x3', '8x4', '휴식', '8x5']);
+});
+
+test('하체도 무게 고정으로: 무게는 그대로 횟수 단계를 오르고, 끝을 성공하면 5% 올려 첫 횟수부터', () => {
+  const c = cfg();
+  c.main.prog = 'w'; c.main.ladder = [3, 4, 5];
+  const ss = L.replay(c, [...days(18), ...days(6, { dl: false }).map((l, i) => ({ d: L.toStr(L.toNum(TODAY) + 21 + i), res: l.res }))]);
+  assert.deepEqual(ss.map((s) => [r1(s.presc.main.dl), s.presc.main.reps]), [[40, 3], [40, 4], [40, 5], [42, 3], [42, 2]]);
+  assert.equal(ss[2].presc.main.top, true);                    // 마지막 횟수 세션은 상체가 쉰다
+  assert.equal(ss[2].presc.acc.lat.skip, true);
+  assert.equal(ss[4].presc.main.retry, true);                  // 실패하면 한 단계(−1회) 낮춰 다시
+});
+
+test('고무밴드는 증량 없이 기록만: 몇 달을 해도 그대로, 기록한 날 쓴 밴드를 남긴다', () => {
+  const c = cfg();
+  const pull = L.accDefaults(L.EXTRA.find((x) => x.id === 'pullup'));
+  pull.bands = ['1번밴드', '2번밴드'];
+  c.acc.push(pull);
+  const logs = days(36).map((l) => Object.assign(l, { p: 1, res: { dl: true, sq: true, pullup: true }, b: { pullup: ['1번밴드', '2번밴드'] } }));
+  pull.bands = ['2번밴드'];                                     // 나중에 1번 밴드를 뺌
+  const sim = L.simulate(c, logs, L.toStr(L.toNum(TODAY) + 50), { until: L.toNum(TODAY) + 52 });
+  const logged = [...sim.days.values()].filter((e) => e.kind === 'log' && e.type === 'D').map((e) => rowOf(e, 'pullup')).filter((r) => r && r.avail === 'ok');
+  assert.ok(logged.length >= 6);
+  assert.ok(logged.every((r) => r.reps === 5 && r.w == null && r.bands.join() === '1번밴드,2번밴드'));
+  assert.equal(L.fmtW(logged[0]), '밴드');
+  const next = rowOf(sim.next, 'pullup') || rowOf([...sim.days.values()].find((e) => e.kind === 'plan' && e.type === 'D'), 'pullup');
+  assert.deepEqual([next.reps, next.bands], [5, ['2번밴드']]);
+  assert.deepEqual(L.loadInfo(next, c), { label: '밴드', text: '2번밴드' });
+});
+
+test('훈련방식 바꾸기: 그 종목의 세션 N부터 새 방식·무게로 첫 칸부터, 지난 세션은 그대로', () => {
+  const c = cfg();
+  const ohp = c.acc.find((a) => a.id === 'ohp');
+  ohp.chg = [{ no: 6, mode: 'barbell', w: 20 }];
+  ohp.ladder = [3, 4, 5];
+  const ss = L.replay(c, days(54));
+  assert.deepEqual(ss.map((s) => accCell(s, 'ohp')), ['10x3', '10x4', '10x5', '휴식', '15x3', '20x3', '20x4', '휴식', '20x5', '21x3']);
+  const row = L.dayRows(c, ss[5].presc, 'D').find((r) => r.id === 'ohp');
+  assert.deepEqual([row.mode, row.name], ['barbell', 'OHP']);
+  assert.equal(L.loadInfo(L.dayRows(c, ss[9].presc, 'D').find((r) => r.id === 'ohp'), c).text, '20kg + 1.25kg 한 짝(한쪽만) → 21.25kg');
+  const p = L.projectTo(c, 7);
+  assert.deepEqual([p.state.acc.ohp.mode, p.state.acc.ohp.w, p.presc.acc.ohp.reps], ['barbell', 20, 4]);
 });

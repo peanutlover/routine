@@ -1,5 +1,5 @@
 // 오프라인 캐시: 앱 파일은 네트워크 우선(새 버전 즉시 반영), 글꼴은 캐시 우선.
-const CACHE = 'routine5-v12';
+const CACHE = 'routine5-v13';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
