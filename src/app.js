@@ -67,10 +67,31 @@
           for (const [id, v] of Object.entries(l.b)) if (Array.isArray(v)) b[id] = v.filter((s) => typeof s === 'string');
           if (Object.keys(b).length) o.b = b;
         }
+        const s = sanitizeSnap(l.s);
+        if (s) o.s = s;
         return o;
       })
       .sort((a, b) => (a.d < b.d ? -1 : 1));
+    // 예전 판에서 한 기록에도 그날의 상태를 남겨 둔다 (이제부터 설정을 바꿔도 지난 기록은 그대로).
+    L.snapLogs(cfg, logs);
     return { v: 1, updatedAt: +x.updatedAt || 0, started: !!x.started || logs.length > 0, cfg, logs };
+  }
+  // 기록에 남긴 그날의 상태 (logic.js snapLogs 참고). 모양이 맞지 않는 것은 버리고 다시 계산한다.
+  function sanitizeSnap(s) {
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return null;
+    const fin = (v) => typeof v === 'number' && Number.isFinite(v);
+    const wv = (v) => (fin(v) && v > 0 ? v : null);
+    const cnt = (v, d) => (fin(v) && v >= 1 ? Math.round(v) : d);
+    const m = s.main;
+    if (!m || typeof m !== 'object' || ![m.l, m.s, m.t, m.b].every(fin)) return null;
+    const out = { main: { l: Math.round(m.l), s: Math.round(m.s), t: Math.round(m.t), b: Math.max(1, Math.round(m.b)), f: m.f ? 1 : 0, top: m.top ? 1 : 0,
+      k: m.k === 'w' ? 'w' : 'r', W: wv(m.W), r: cnt(m.r, 5), e: cnt(m.e, 3) } };
+    for (const [id, v] of Object.entries(s)) {
+      if (id === 'main' || !v || typeof v !== 'object' || !L.MODE_KEYS.includes(v.m) || ![v.t, v.n].every(fin)) continue;
+      out[id] = { m: v.m, w: wv(v.w), t: Math.round(v.t), n: Math.round(v.n), k: v.k === 'r' ? 'r' : 'w', W: wv(v.W), r: cnt(v.r, 5), e: cnt(v.e, 3), f: v.f ? 1 : 0 };
+      if (v.i === 'kg' || v.i === 'pct') Object.assign(out[id], { i: v.i, v: fin(v.v) && v.v >= 0 ? v.v : 5 });
+    }
+    return out;
   }
   // 진행 방식: r 횟수 고정 · w 무게 고정(횟수 단계 ladder)
   function sanitizeProg(o) {
@@ -95,7 +116,11 @@
       if (typeof x.name === 'string' && x.name.trim()) o.name = x.name.trim();
       return o;
     }).sort((p, q) => p.no - q.no) : [];
-    for (const k of ['equip', 'light', 'sw', 'phase']) delete b[k];
+    b.from = Math.max(1, Math.floor(Number(b.from)) || 1);
+    // 세션 중간에 넣은 종목: 넣을 때 그 세션에서 지난 운동 수 (그 세션의 남은 차례만 한다)
+    const k = Math.floor(Number(b.fromK));
+    if (k >= 1 && k <= 5) b.fromK = k; else delete b.fromK;
+    for (const key of ['equip', 'light', 'sw', 'phase']) delete b[key];
     return b;
   }
   // 종목별 휴식 타이머 시간(초). 타이머에서 처음 정하면 저장된다.
@@ -113,6 +138,7 @@
       const b = {};
       if (Number.isFinite(Number(o.step)) && o.step !== null && o.step !== '') b.step = Math.max(-9, Math.min(20, Math.floor(o.step)));
       if (Number(o.n) > 0) b.n = Math.floor(o.n);
+      if (Number(o.w) > 0) b.w = Number(o.w);   // 훈련방식을 바꾼 구간에서 시작할 때 그 지점의 무게
       acc[id] = b;
     }
     return { no: sp.no, k: sp.k, stage: sp.stage, acc };
@@ -145,7 +171,8 @@
       const snap = await ref.get();
       const theirs = snap.exists ? sanitize(snap.data()) : null;
       remote = ref;
-      if (theirs && theirs.started && theirs.updatedAt > data.updatedAt) { data = theirs; saveLocal(); render(); }
+      // 이 기기에서 아직 시작하지 않았으면(시작 전에 운동만 골라 둔 상태 포함) 계정에 있는 기록을 쓴다.
+      if (theirs && theirs.started && (!data.started || theirs.updatedAt > data.updatedAt)) { data = theirs; saveLocal(); render(); if (tab === 'settings') renderSettings(); }
       else if (data.started && (!theirs || data.updatedAt > theirs.updatedAt)) pushRemote();
       renderSettingsStorage();
     } catch (e) { remote = null; }
@@ -167,6 +194,7 @@
     return { cfg: data.cfg, sim, tl: sim, cur: sim.cur };
   }
 
+  const r2 = (x) => Math.round(x * 100) / 100;   // 입력한 무게는 0.01kg까지 그대로 (1.25kg 원판 등)
   const md = (n) => { const s = L.toStr(n); return +s.slice(5, 7) + '.' + +s.slice(8, 10); };
   const longDate = (n) => { const s = L.toStr(n); return `${+s.slice(5, 7)}월 ${+s.slice(8, 10)}일 (${DOW[L.weekday(n)]})`; };
   const stageText = (main) => (main.stage >= 1 ? `묶음 ${main.bundle} · ${main.stage}단계` : `묶음 ${main.bundle} · 회복`);
@@ -198,6 +226,8 @@
 
   // ---------- 그리기 ----------
   function render() {
+    // 시작 전에는 시작일이 늘 오늘이다 (운동을 골라 두고 며칠 뒤에 시작해도 오늘부터).
+    if (!data.started && !data.logs.length && data.cfg.startDate !== today) data.cfg.startDate = today;
     const m = model(weekMon + 6);
     renderHeader(m);
     if (tab === 'week') renderWeek(m);
@@ -254,7 +284,7 @@
     h += '</tbody></table>';
     if (unbalanced) h += `<div class="skipnote balance">${BALANCE_NOTE}</div>`;
     if (waiting.length) h += `<div class="skipnote">이번 차례는 이미 해서 하체가 따라올 때까지 쉬어요: ${waiting.map((r) => esc(r.name)).join(', ')}</div>`;
-    if (skipped.length) h += `<div class="skipnote">하체 4단계(가장 무거운 세션)라 상체·팔은 쉬어요: ${skipped.map((r) => esc(r.name)).join(', ')}</div>`;
+    if (skipped.length) h += `<div class="skipnote">하체가 마지막 단계인 세션이라 상체·팔은 쉬어요: ${skipped.map((r) => esc(r.name)).join(', ')}</div>`;
     return h;
   }
 
@@ -770,7 +800,9 @@
     // 고무밴드 종목은 그날 쓴 밴드를 함께 남긴다.
     const bands = {};
     for (const r of info.rows) if (r.band && r.id in res) bands[r.id] = (r.bands || []).slice();
-    const entry = (d) => Object.assign({ d, res, p: 1 }, Object.keys(bands).length ? { b: bands } : {});
+    // 그날의 상태·무게·횟수도 남긴다 (나중에 설정을 바꿔도 이 기록은 그대로).
+    const s = L.snapOf(info.rows, (r) => r.id in res);
+    const entry = (d) => Object.assign({ d, res, p: 1 }, Object.keys(bands).length ? { b: bands } : {}, { s });
     if (sheet.mode === 'new') {
       data.logs.push(entry(L.toStr(sheet.day)));
       const after = L.simulate(data.cfg, data.logs, today, { until: -Infinity });
@@ -782,7 +814,12 @@
       if (left) msg += ` · 안 한 ${left}종목은 다음 ${TYPE_NAME[info.type]} 날로`;
       closeSheet(); commit(msg);
     } else {
-      data.logs[sheet.li] = entry(data.logs[sheet.li].d);
+      const old = data.logs[sheet.li];
+      // 이미 남긴 종목은 그때 상태를 그대로 두고, 이번에 새로 고른 종목만 지금 상태로 남긴다.
+      if (old.s) for (const k of Object.keys(s)) if (old.s[k]) s[k] = old.s[k];
+      data.logs[sheet.li] = entry(old.d);
+      // 이 날 결과가 바뀌었으니 뒤 기록은 지금 설정으로 다시 계산해 남긴다.
+      L.snapLogs(data.cfg, data.logs, sheet.li + 1);
       closeSheet(); commit('결과를 고쳤어요. 이후 계획을 다시 계산했어요');
     }
   }
@@ -802,7 +839,7 @@
     else if (day == null) day = L.toNum(cfg.startDate) < T ? L.toNum(cfg.startDate) : T - 1;
     const acc = {};
     for (const a of cfg.acc) { const s = st.acc[a.id]; acc[a.id] = { w: s.w, mode: s.mode, step: s.step, n: s.n }; }
-    sheet = { kind: 'start', day, no: sp.no, k: sp.k, stage: sp.stage, dl: cfg.main.dl, acc, note: '', err: '', opener: document.activeElement };
+    sheet = { kind: 'start', day, no: sp.no, k: sp.k, stage: Math.min(sp.stage, L.mainTop(cfg)), dl: cfg.main.dl, acc, note: '', err: '', opener: document.activeElement };
     $('sheet').hidden = false;
     renderStart();
     const first = $('panel').querySelector('input:not([disabled]), select');
@@ -813,26 +850,28 @@
     const cfg = data.cfg;
     const p = L.projectTo(cfg, sheet.no);
     if (!p) {
-      sheet.stage = ((sheet.no - 1) % L.MAIN_STAGES) + 1;
+      sheet.stage = ((sheet.no - 1) % L.mainTop(cfg)) + 1;
       stageDefaults();
+      // 그 세션의 훈련방식 (기록 중에 바꿨으면 바꾼 방식)
+      for (const a of cfg.acc) { const seg = L.segAt(a, sheet.no), o = sheet.acc[a.id]; if (o.mode !== seg.mode) Object.assign(o, { mode: seg.mode, w: seg.w }); }
       sheet.note = `지금 시작 지점(세션 ${L.startPoint(cfg).no})보다 앞 세션이라 무게는 채우지 못했어요. 그 세션의 무게로 고쳐 주세요.`;
       return;
     }
     sheet.stage = p.presc.main.stage;
-    sheet.dl = L.roundW(p.presc.main.dl);
+    sheet.dl = r2(p.presc.main.dl);
     for (const a of cfg.acc) {
       const s = p.state.acc[a.id];
-      sheet.acc[a.id] = { w: s.w == null ? null : L.roundW(s.w), mode: s.mode, step: s.step, n: s.n };
+      sheet.acc[a.id] = { w: s.w == null ? null : r2(s.w), mode: s.mode, step: s.step, n: s.n };
     }
     sheet.note = `세션 ${L.startPoint(cfg).no}부터 모두 성공했다고 보고 채웠어요. 실제와 다르면 고쳐 주세요.`;
   }
   // 하체 단계를 직접 바꾸면 상체·팔 횟수도 그 단계에 맞춘다.
   function stageDefaults() {
-    for (const a of data.cfg.acc) Object.assign(sheet.acc[a.id], L.accAt((a.from || 1) > sheet.no ? 1 : sheet.stage, a));
+    for (const a of data.cfg.acc) Object.assign(sheet.acc[a.id], L.accAt((a.from || 1) > sheet.no ? 1 : sheet.stage, a, L.restStage(data.cfg)));
   }
   // 보조 종목 사다리 칸 고르기: 무게 고정은 횟수, 횟수 고정은 무게로 보여준다.
   function stepOptions(a, o) {
-    const label = (step) => (a.prog === 'r' ? L.fmtW({ w: L.stepW(data.cfg, a, o.mode, o.w, step), n: step, inc: a.inc, incV: a.incV }) : `${L.ladderReps(a, step)}회`);
+    const label = (step) => (a.prog === 'r' ? L.fmtW({ w: L.stepW(data.cfg, a, o.mode, o.w, step), mode: o.mode, n: step, inc: a.inc, incV: a.incV }) : `${L.ladderReps(a, step)}회`);
     const opts = [];
     for (let step = Math.min(-2, o.step); step <= L.accTop(a); step++) {
       if (step < 0 && label(step) === label(step + 1)) continue;
@@ -860,12 +899,10 @@
       const o = d.acc[a.id];
       const off = (a.from || 1) > d.no;
       const seg = L.segAt(a, d.no);
-      const own = seg.no === 1;   // 처음 설정의 무게만 여기서 고친다 (훈련방식을 바꾼 뒤 무게는 설정에서)
       h += `<div class="strow"><div class="stname"><span class="tag ${a.day}">${a.day === 'D' ? '데드 날' : '스쿼트 날'}</span><b>${esc(seg.name)}</b><span class="small">${esc(modeName(o.mode))}</span>${off ? `<span class="small">세션 ${a.from}부터</span>` : ''}</div>`;
       if (o.mode === 'band') { h += '<p class="small">고무밴드는 증량 없이 기록만 해요.</p></div>'; continue; }
       h += `<div class="row2">${o.w == null ? '<div class="field"><span>무게</span><div class="derived">생략</div></div>'
-          : own ? wField(`st-w-${a.id}`, o.mode, o.w, '무게', `data-sk="w" data-id="${esc(a.id)}"`)
-            : `<div class="field"><span>무게</span><div class="derived">${esc(L.fmtW({ w: o.w }))}</div></div>`}
+          : wField(`st-w-${a.id}`, o.mode, o.w, a.prog === 'r' ? '1단계 무게' : '무게', `data-sk="w" data-id="${esc(a.id)}"`)}
         <label class="field"><span>${a.prog === 'r' ? '무게 단계' : '횟수'}</span><select id="st-step-${esc(a.id)}" data-sk="step" data-id="${esc(a.id)}">${stepOptions(a, o)}</select></label></div></div>`;
     }
     h += '</div>';
@@ -922,14 +959,18 @@
     if (!(d.dl > 0)) return fail('데드리프트 무게를 넣어 주세요.');
     for (const a of cfg.acc) { const w = d.acc[a.id].w; if (w != null && d.acc[a.id].mode !== 'band' && !(w > 0)) return fail(`${a.name} 무게를 확인해 주세요.`); }
     cfg.startDate = L.toStr(d.day);
-    cfg.main.dl = L.roundW(d.dl);
+    cfg.main.dl = r2(d.dl);
     const acc = {};
     for (const a of cfg.acc) {
       const o = d.acc[a.id];
-      if (a.w != null && o.w != null && L.segAt(a, d.no).no === 1) a.w = L.roundW(o.w);
       acc[a.id] = { step: o.step, n: o.n || 0 };
+      if (o.w == null || o.mode === 'band') continue;
+      // 처음 설정 구간이면 종목의 시작 무게로, 훈련방식을 바꾼 구간이면 시작 지점의 무게로 남긴다.
+      if (L.segAt(a, d.no).no === 1) { if (a.w != null) a.w = r2(o.w); } else acc[a.id].w = r2(o.w);
     }
     cfg.from = { no: d.no, k: d.k, stage: d.stage, acc };
+    // 시작 지점이 바뀌면 기록이 다른 세션·순서로 다시 계산되므로 남긴 상태도 새로 남긴다.
+    if (data.logs.length) L.snapLogs(cfg, data.logs, 0);
     const day = d.day;
     closeSheet();
     weekMon = L.mondayOf(day);
@@ -953,9 +994,10 @@
     }
     return `<label class="field"><span>${esc(label)} (kg)</span><input type="number" inputmode="decimal" step="0.5" min="0" id="${esc(id)}" ${attrs} value="${w == null ? '' : w}" placeholder="생략"></label>`;
   }
-  // 훈련방식을 바꿀 때의 무게: 목록 방식이면 가장 가까운 가진 무게, 밴드는 없음.
+  // 훈련방식을 바꿀 때의 무게: 목록 방식이면 가장 가까운 가진 무게, 바벨은 빈 봉(20kg) 이상, 밴드는 없음.
   function snapW(mode, w) {
     if (mode === 'band') return null;
+    if (mode === 'barbell' && w != null && w < 20) return 20;
     const list = listOf(mode);
     if (!L.MODES[mode].list || !list.length) return w;
     if (w == null) return list[0];
@@ -966,12 +1008,25 @@
     const c = (a.chg || []).slice().sort((p, q) => p.no - q.no).pop();
     return c ? { no: c.no, mode: c.mode, w: c.w, name: c.name || a.name, chg: c } : { no: 0, mode: a.mode, w: a.w, name: a.name, chg: null };
   }
-  // 지금 훈련방식을 바꾸면 적용되는 그 종목의 세션 번호: 진행 중인 세션을 이미 한 번이라도 했으면 다음 세션부터.
-  function changeNo(a) {
-    const sim = model(L.toNum(today)).sim;
-    const sess = sim.acc[a.id] && sim.acc[a.id][sim.real.acc[a.id]];
-    return sess ? sess.no + (sess.res.length ? 1 : 0) : sim.cur.no;
+  // 종목의 지금 (오늘 예상은 빼고 기록만으로 계산):
+  //   no = 훈련방식·무게를 지금 바꾸면 적용되는 세션 (진행 중인 세션을 이미 한 번이라도 했으면 다음 세션),
+  //   logged = 지금 훈련방식 구간에 이미 한 기록이 있는가, w = 진행 중인(다음) 세션의 무게.
+  const logSim = () => L.simulate(data.cfg, data.logs, today, { until: -Infinity });
+  function exNow(a, sim = logSim()) {
+    const ss = sim.acc[a.id] || [];
+    const sess = ss[sim.real.acc[a.id]];
+    const st = sess && sess.state;
+    const c = curSeg(a);
+    // 진행 중인 세션이 상체·팔이 쉬는 세션이면 실제로 하는 다음 세션부터라고 알린다.
+    const v = sess && !sess.res.length ? sim.view(sess.no) : null;
+    const rest = !!(v && v.acc[a.id] && v.acc[a.id].skip);
+    return {
+      no: sess ? sess.no + (sess.res.length || rest ? 1 : 0) : sim.cur.no,
+      logged: ss.some((s) => s.no >= (c.no || 1) && s.res.length > 0),
+      w: st && st.w != null ? r2(a.prog === 'r' ? L.stepW(data.cfg, a, st.mode, st.w, st.step) : st.w) : null,
+    };
   }
+  const changeNo = (a) => exNow(a).no;
   function progNote(x) {
     if (x.mode === 'band') return '고무밴드는 힘을 정확히 잴 수 없어 증량하지 않고 기록만 해요. 밴드를 바꾸면 그다음 기록부터 바뀐 밴드로 남아요.';
     const up = L.MODES[x.mode].list ? `가진 ${modeName(x.mode)} 중 다음 무게` : x.inc === 'kg' ? `+${x.incV}kg` : `+${x.incV}%`;
@@ -1009,10 +1064,15 @@
     h += `<p class="small prognote">${esc(progNote(x))}</p>`;
     return h;
   }
-  function pendBox(a, pm) {
-    return `<div class="swbox" role="group" aria-label="훈련방식 바꾸기"><p class="small"><strong>${esc(toMode(pm.mode))} 바꿀까요?</strong> 이 종목의 세션 ${changeNo(a)}부터 새 무게의 첫 단계로 시작하고, 지난 기록은 그대로 남아요.</p>
-      <div class="row2"><label class="field"><span>이름</span><input type="text" id="pm-name" data-pm="name" value="${esc(pm.name)}"></label>${wField('pm-w', pm.mode, pm.w, '시작 무게', 'data-pm="w"')}</div>
-      <div class="btnrow"><button class="btn" type="button" data-act="pmOk">바꾸기</button><button class="btn ghost" type="button" data-act="pmCancel">취소</button></div></div>`;
+  // 기록이 있는 종목의 훈련방식·무게 바꾸기 확인 (wOnly = 훈련방식은 그대로 무게만)
+  function pendBox(a, pm, no) {
+    const btns = '<div class="btnrow"><button class="btn" type="button" data-act="pmOk">바꾸기</button><button class="btn ghost" type="button" data-act="pmCancel">취소</button></div>';
+    if (pm.wOnly) {
+      return `<div class="swbox" role="group" aria-label="무게 바꾸기"><p class="small"><strong>세션 ${no}부터 새 무게로 할까요?</strong> 이미 한 기록은 그대로 두고, 이 종목의 세션 ${no}부터 새 무게의 첫 단계로 시작해요.</p>
+        <div class="row2">${wField('pm-w', pm.mode, pm.w, '새 무게', 'data-pm="w"')}</div>${btns}</div>`;
+    }
+    return `<div class="swbox" role="group" aria-label="훈련방식 바꾸기"><p class="small"><strong>${esc(toMode(pm.mode))} 바꿀까요?</strong> 이 종목의 세션 ${no}부터 새 무게의 첫 단계로 시작하고, 지난 기록은 그대로 남아요.</p>
+      <div class="row2"><label class="field"><span>이름</span><input type="text" id="pm-name" data-pm="name" value="${esc(pm.name)}"></label>${wField('pm-w', pm.mode, pm.w, '시작 무게', 'data-pm="w"')}</div>${btns}</div>`;
   }
 
   // ---------- 설정 ----------
@@ -1020,11 +1080,12 @@
     const cfg = data.cfg;
     const sp = L.startPoint(cfg);
     const wl = sp.no > 1 ? `세션 ${sp.no} 무게` : '시작 무게';
+    const sim = data.logs.length ? logSim() : null;
     let h = `<div class="card"><h2>시작 지점</h2>
       <p class="startsum"><b>${longDate(L.toNum(cfg.startDate))}</b> · 세션 ${sp.no}의 ${sp.k + 1}번째 운동(${TYPE_NAME[L.slotType(sp.k)]}) · 하체 ${sp.stage}단계</p>
       <p class="small">이미 하던 루틴이 있으면 시작 지점을 그 세션으로 옮기세요. 그 날부터 오늘까지 한 운동은 이번 주 화면에서 지난 날을 눌러 날짜순으로 기록하면 돼요. 아래 무게는 시작 지점 세션의 무게예요.</p>
       <div class="btnrow"><button class="btn ghost" type="button" data-act="startSheet">시작 지점 바꾸기 · 이어서 시작</button></div>
-      <p class="small">쉬는 요일은 따로 없어요. 세션의 6번째 운동을 마친 다음 날 하루 쉬고, 기록하지 않은 날은 쉰 날로 봐요. 무게·횟수를 바꾸면 지난 기록까지 포함해 전체 계획을 다시 계산해요.</p></div>`;
+      <p class="small">쉬는 요일은 따로 없어요. 세션의 6번째 운동을 마친 다음 날 하루 쉬고, 기록하지 않은 날은 쉰 날로 봐요. 설정을 바꿔도 이미 한 기록의 무게·횟수는 그대로 두고, 그다음부터 바뀐 설정으로 계산해요. 데드리프트 시작 무게를 바꾸면 지금 무게도 같은 비율로 바뀌어요.</p></div>`;
 
     const cnt = L.plateCounts(cfg.plates);
     h += `<div class="card"><h2>가지고 있는 경량원판</h2>
@@ -1057,17 +1118,20 @@
         ? `무게는 그대로 두고 세션마다 다음 횟수로 가요. 마지막 ${L.ladderOf(mm).slice(-1)[0]}회를 성공하면 ${mm.pct}% 올려 첫 횟수부터 해요. 마지막 횟수 세션은 상체·팔이 쉬어요(단계가 3개 이상일 때).`
         : `횟수는 그대로 두고 세션마다 ${mm.pct}%씩 올려 4단계까지 가고, 4단계를 성공하면 2단계 무게로 내려 새 묶음을 시작해요.`}</p></div>`;
 
-    h += `<div class="card"><h2>상체·팔 보조 운동</h2><p class="small">훈련방식은 언제든 바꿀 수 있어요. 기록이 있으면 그 종목의 다음 세션부터 새 무게로 시작하고 지난 기록은 그대로 둬요. 바벨·머신 무게를 비워 두면 "무게 생략"으로 두고 증량분만 +1kg처럼 표시해요.</p>`;
+    h += `<div class="card"><h2>상체·팔 보조 운동</h2><p class="small">훈련방식·무게는 언제든 바꿀 수 있어요. 이미 한 기록이 있으면 그 종목의 다음 세션부터 새 무게로 시작하고 지난 기록은 그대로 둬요. 진행 방식·횟수·세트·장비 무게를 바꿔도 지난 기록은 그대로이고, 지금 무게에서 바뀐 설정으로 이어가요. 바벨·머신 무게를 비워 두면 "무게 생략"으로 두고 증량분만 +1kg처럼 표시해요.</p>`;
     for (const a of cfg.acc) {
       const del = pendingDel === a.id;
       const cur = curSeg(a);
       const pm = pendingMode && pendingMode.id === a.id ? pendingMode : null;
-      const x = Object.assign({}, a, { mode: cur.mode, w: cur.w, name: cur.name });
+      // 이미 한 기록이 있으면 지금(진행 중인 세션) 무게를 보여 주고, 바꾸면 다음 세션부터 적용한다.
+      const now = sim ? exNow(a, sim) : null;
+      const logged = !!(now && now.logged);
+      const x = Object.assign({}, a, { mode: cur.mode, w: logged ? now.w : cur.w, name: cur.name });
       h += `<div class="acc" data-ex="${esc(a.id)}"><div class="acc-head"><span class="tag ${a.day}">${a.day === 'D' ? '데드 날' : '스쿼트 날'}</span>
         <input type="text" id="acc-${esc(a.id)}-name" data-f="name" value="${esc(cur.name)}" aria-label="종목 이름">
         <button class="btn ${del ? 'danger' : 'ghost'}" type="button" data-act="delAcc" data-id="${esc(a.id)}">${del ? '한 번 더 누르면 삭제' : '삭제'}</button></div>
-        ${cur.no ? `<p class="small">세션 ${cur.no}부터 ${esc(toMode(cur.mode))} 바꿔서 하고 있어요. 무게는 그때 시작한 무게예요.</p>` : ''}
-        ${exForm(x, 'acc-' + a.id, { wLabel: cur.no ? `세션 ${cur.no} 무게` : wl, modeSel: pm && pm.mode, pend: pm && pendBox(a, pm) })}</div>`;
+        ${cur.no ? `<p class="small">세션 ${cur.no}부터 ${esc(toMode(cur.mode))} 바꿔서 하고 있어요.</p>` : ''}
+        ${exForm(x, 'acc-' + a.id, { wLabel: logged ? '지금 무게' : cur.no ? `세션 ${cur.no} 무게` : wl, modeSel: pm && pm.mode, pend: pm && pendBox(a, pm, now ? now.no : changeNo(a)) })}</div>`;
     }
     h += `<div class="btnrow"><button class="btn ghost" type="button" data-act="addAcc" data-day="D">+ 데드 날 운동</button><button class="btn ghost" type="button" data-act="addAcc" data-day="S">+ 스쿼트 날 운동</button></div></div>`;
 
@@ -1080,9 +1144,9 @@
       <li>휴식일에도 운동했다면 기록할 수 있고, 기록하면 운동한 날로 계산해요.</li>
       <li>이미 하던 루틴이면 시작 지점을 그 세션·순서·무게로 옮기고, 그 뒤 지난 날들을 날짜순으로 기록해 이어가요.</li>
       <li>데드리프트 = 스쿼트 × 1.2. 둘은 한 묶음으로 같이 오르내려요. 하체를 하나라도 실패하면 다음 세션은 한 단계 낮춰 다시 해요.</li>
-      <li>무게 고정 종목은 세션마다 다음 횟수로, 횟수 고정 종목은 세션마다 한 칸 무거운 무게로 가요. 실패하면 한 단계 낮춰 다시 하고, 사다리 끝을 성공하면 다음 세션에 증량해요. 하체가 가장 무거운 단계인 세션은 상체·팔이 쉬어요.</li>
+      <li>무게 고정 종목은 세션마다 다음 횟수로, 횟수 고정 종목은 세션마다 한 칸 무거운 무게로 가요. 실패하면 한 단계 낮춰 다시 하고, 사다리 끝을 성공하면 다음 세션에 증량해요. 하체가 마지막 단계인 세션(횟수 고정은 4단계)은 상체·팔이 쉬어요.</li>
       <li>바벨·머신·원판 여러 장은 %·kg으로 올리고 원판·무게추 조합을 알려줘요. 덤벨·일체형 바벨·원판 한 장은 가진 무게 중 다음 무게로 올라가요. 고무밴드는 증량 없이 기록만 해요.</li>
-      <li>무게·횟수·세트를 중간에 바꿔도 지난 성공·실패만 보고 지금 설정으로 다음을 계산해요.</li>
+      <li>진행 방식·횟수·세트·장비 무게 같은 설정을 중간에 바꿔도 이미 한 기록은 그대로 두고, 지금 무게와 성공·실패에서 바뀐 설정으로 다음을 계산해요.</li>
     </ul></div>`;
 
     h += `<div class="card"><h2>데이터</h2><p class="small" id="storageNote"></p>
@@ -1138,20 +1202,36 @@
     else if (f === 'day') a.day = v === 'S' ? 'S' : 'D';
     else if (f === 'mode') {
       if (!L.MODE_KEYS.includes(v)) return;
-      const cur = draft ? { mode: a.mode, w: a.w, name: a.name } : curSeg(a);
-      if (!draft && data.logs.length) {
-        pendingMode = v === cur.mode ? null : { id: a.id, mode: v, w: snapW(v, cur.w), name: cur.name };
-        renderSettings();
-        return;
+      if (draft) { a.mode = v; a.w = snapW(v, a.w); }
+      else {
+        const cur = curSeg(a), now = exNow(a);
+        // 지금 구간에 이미 한 기록이 있으면 다음 세션부터 (확인 상자). 지금 무게에서 가장 가까운 무게를 제안한다.
+        if (now.logged) {
+          pendingMode = v === cur.mode ? null : { id: a.id, mode: v, w: snapW(v, now.w != null ? now.w : cur.w), name: cur.name };
+          renderSettings();
+          return;
+        }
+        // 기록이 없으면 바로 바꾼다: 기록 중에 바꾼 구간이면 그 구간을, 아니면 처음 설정을.
+        if (cur.chg && data.logs.length) { cur.chg.mode = v; cur.chg.w = snapW(v, cur.chg.w); }
+        else { a.mode = v; a.w = snapW(v, a.w); a.chg = []; }
       }
-      a.mode = v; a.w = snapW(v, a.w);
-      if (!draft) a.chg = [];
       if (v === 'band' && !a.bands.length && data.cfg.gear.bands.length) a.bands = [data.cfg.gear.bands[0]];
       redraw = true;
     } else if (f === 'w') {
       const t = seg || a;
-      if (v === '') { if (L.MODES[t.mode].list) return; t.w = null; }
-      else { const n = Number(v); if (!(n > 0)) return back('무게는 0보다 커야 해요. 비우면 생략이에요', t.w == null ? '' : t.w); t.w = n; }
+      const now = draft ? null : exNow(a);
+      const shownW = now && now.logged ? now.w : t.w;
+      if (v === '' && L.MODES[t.mode].list) { el.value = shownW == null ? '' : shownW; return; }
+      const nw = v === '' ? null : Number(v);
+      if (v !== '' && !(nw > 0)) return back('무게는 0보다 커야 해요. 비우면 생략이에요', shownW == null ? '' : shownW);
+      // 이미 한 기록이 있으면 지난 기록은 그대로 두고 다음 세션부터 새 무게로 (확인 상자)
+      if (now && now.logged) {
+        const cur = curSeg(a);
+        pendingMode = same(nw, shownW) || (nw == null && shownW == null) ? null : { id: a.id, mode: cur.mode, w: nw, name: cur.name, wOnly: true };
+        renderSettings();
+        return;
+      }
+      t.w = nw;
     } else if (f === 'stack') { a.stack = numList(v); el.value = a.stack.join(', '); redraw = true; }
     else if (f === 'band') a.bands = [...box.querySelectorAll('[data-f="band"]:checked')].map((i) => i.value);
     else if (f === 'prog') { a.prog = v === 'r' ? 'r' : 'w'; redraw = true; }
@@ -1184,7 +1264,7 @@
     a.chg = (a.chg || []).filter((x) => x.no < no).concat(c);
     if (pm.mode === 'band' && !a.bands.length && data.cfg.gear.bands.length) a.bands = [data.cfg.gear.bands[0]];
     pendingMode = null;
-    save(`${c.name || a.name} · 세션 ${no}부터 ${toMode(pm.mode)} 해요`);
+    save(pm.wOnly ? `${c.name || a.name} · 세션 ${no}부터 ${c.w == null ? '무게 생략' : L.fmtW({ w: c.w, mode: c.mode })}으로 해요` : `${c.name || a.name} · 세션 ${no}부터 ${toMode(pm.mode)} 해요`);
     renderSettings();
   }
 
@@ -1282,8 +1362,10 @@
     const used = new Set(data.cfg.acc.map((a) => a.id));
     // 기록이 있으면 예전에 지운 종목의 기록이 다시 붙지 않도록 새 id를 쓴다.
     const id = sheet.pick && !used.has(sheet.pick) && !data.logs.length ? sheet.pick : 'x' + Date.now().toString(36);
-    const no = data.started ? model(weekMon + 6).cur.no : 1;
-    const a = sanitizeAcc(Object.assign({}, x, { id, name: x.name.trim(), from: no, chg: [] }));
+    // 진행 중인 세션에 넣으면 그 세션의 남은 차례부터 한다 (이미 지난 차례를 밀린 것으로 보지 않게).
+    const cur = data.started ? model(weekMon + 6).cur : null;
+    const no = cur ? cur.no : 1;
+    const a = sanitizeAcc(Object.assign({}, x, { id, name: x.name.trim(), from: no, fromK: cur ? cur.n : 0, chg: [] }));
     data.cfg.acc.push(a);
     closeSheet();
     save(data.started ? `${a.name} · 세션 ${no}부터 들어가요` : `${a.name} · ${TYPE_NAME[a.day]} 날에 넣었어요`);
