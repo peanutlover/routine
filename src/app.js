@@ -24,7 +24,14 @@
 
   // ---------- 저장 ----------
   function loadLocal() {
-    try { const raw = localStorage.getItem(KEY); return raw ? sanitize(JSON.parse(raw)) : null; } catch (e) { return null; }
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (!raw) return null;
+      const x = JSON.parse(raw), out = sanitize(x);
+      // 예전 판 데이터: 오래 쉬면 처음부터 다시 하는 규칙을 적용하기 시작한 날을 바로 남겨 둔다 (열 때마다 늦춰지지 않게).
+      if (out && !(x.cfg && x.cfg.restFrom)) { try { localStorage.setItem(KEY, JSON.stringify(out)); } catch (e) { /* 저장소를 쓸 수 없는 환경 */ } }
+      return out;
+    } catch (e) { return null; }
   }
   function saveLocal() {
     try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) { /* 저장소를 쓸 수 없는 환경 */ }
@@ -44,6 +51,7 @@
     const cfg = {
       cv: c.cv,
       startDate: /^\d{4}-\d{2}-\d{2}$/.test(c.startDate) ? c.startDate : today,
+      restFrom: /^\d{4}-\d{2}-\d{2}$/.test(c.restFrom) ? c.restFrom : null,
       from: sanitizeFrom(c.from),
       restSec: sanitizeRest(c.restSec),
       plates: Array.isArray(c.plates) ? [...L.plateCounts(c.plates)].flatMap(([p, n]) => Array(Math.min(n, PAIR_MAX)).fill(p)).sort((a, b) => a - b) : base.plates,
@@ -72,6 +80,8 @@
         return o;
       })
       .sort((a, b) => (a.d < b.d ? -1 : 1));
+    // 오래 쉬면 처음부터 다시 하는 규칙은 이 판을 처음 연 뒤의 운동부터 적용한다 (그 전에 한 기록은 그대로).
+    if (!cfg.restFrom) cfg.restFrom = L.toStr(Math.max(L.toNum(today), logs.length ? L.toNum(logs[logs.length - 1].d) + 1 : -Infinity));
     // 예전 판에서 한 기록에도 그날의 상태를 남겨 둔다 (이제부터 설정을 바꿔도 지난 기록은 그대로).
     L.snapLogs(cfg, logs);
     return { v: 1, updatedAt: +x.updatedAt || 0, started: !!x.started || logs.length > 0, cfg, logs };
@@ -197,7 +207,8 @@
   const r2 = (x) => Math.round(x * 100) / 100;   // 입력한 무게는 0.01kg까지 그대로 (1.25kg 원판 등)
   const md = (n) => { const s = L.toStr(n); return +s.slice(5, 7) + '.' + +s.slice(8, 10); };
   const longDate = (n) => { const s = L.toStr(n); return `${+s.slice(5, 7)}월 ${+s.slice(8, 10)}일 (${DOW[L.weekday(n)]})`; };
-  const stageText = (main) => (main.stage >= 1 ? `묶음 ${main.bundle} · ${main.stage}단계` : `묶음 ${main.bundle} · 회복`);
+  // 1단계 아래(실패하거나 오래 쉬어 내려간 단계)는 1단계 바로 아래를 −1단계로 센다.
+  const stageText = (main) => `묶음 ${main.bundle} · ${main.stage >= 1 ? main.stage : '−' + (1 - main.stage)}단계`;
   function wHtml(row) {
     const s = L.fmtW(row);
     return s.endsWith('kg') ? `${esc(s.slice(0, -2))}<span class="unit">kg</span>` : esc(s);
@@ -217,11 +228,43 @@
   }
   const toMode = (m) => josa(modeName(m), '으로', '로');
   const BALANCE_NOTE = '<strong>좌우 균형:</strong> 원판을 더 끼운 쪽은 끝까지 밀어 넣고 바깥으로 움직이지 않게 마구리로 고정하세요. 반대쪽은 원판을 조금 바깥쪽에 둔 채 마구리를 끼우세요.';
+  const STEPS = ['', '한', '두'];
   function flags(row) {
     let f = '';
     if (row.retry) f += '<span class="flag retry">재도전</span>';
+    if (row.rested) f += `<span class="flag rest">쉬어서 ${STEPS[row.rested] || row.rested} 단계 낮춤</span>`;
     if (row.lag) f += `<span class="flag lag">밀림 · 세션 ${row.accNo} 몫</span>`;
     return f;
+  }
+
+  // ---------- 오래 쉬면 처음부터 (알림) ----------
+  // 오늘 할 종목마다 쉰 날 수(마지막으로 한 다음 날부터 어제까지)를 보고, 오늘 처음부터 다시 하게 된 종목과
+  // 이틀·오늘 하루 더 쉬면 처음부터 다시 하게 되는 종목을 알린다. 같은 내용은 종목 이름을 묶어 한 줄로.
+  function gapNotes(sim) {
+    const g = sim.gaps;
+    if (!data.started || !g || g.day !== L.toNum(today)) return [];
+    const more = (k) => (k === 2 ? '이틀 더' : '오늘 하루 더');
+    const out = new Map();
+    const add = (text, name) => { if (!out.has(text)) out.set(text, []); out.get(text).push(name); };
+    for (const x of g.items) {
+      const name = x.main ? '데드리프트·스쿼트' : x.name;
+      if (x.dropped) {
+        const k = L.GAP2 - x.rest;
+        add(`${x.rest}일 쉬어서 ${x.today ? '오늘 ' : ''}세션을 처음부터 다시 해요. ${STEPS[x.dropped]} 단계 낮췄어요.${x.dropped < 2 && (k === 1 || k === 2) ? ` ${more(k)} 쉬면 한 단계 더 낮아져요.` : ''}`, name);
+      } else {
+        const k = L.GAP1 - x.rest;
+        if (k === 1 || k === 2) add(`쉰 지 ${x.rest}일째예요. ${more(k)} 쉬면 세션이 처음부터 다시 시작되고 한 단계 낮아져요.`, name);
+      }
+    }
+    return [...out].map(([text, names]) => ({ text, names }));
+  }
+  function renderGaps(m) {
+    const el = $('gapNote');
+    const notes = gapNotes(m.sim);
+    el.hidden = !notes.length;
+    el.innerHTML = notes.length ? `<p><strong>오래 쉬면 세션을 처음부터 다시 해요</strong></p>
+      <ul>${notes.map((n) => `<li><b>${esc(n.names.join(' · '))}</b> ${esc(n.text)}</li>`).join('')}</ul>
+      <p class="small">한 종목을 ${L.GAP1}일 이상 쉬면 그 종목의 세션을 처음부터 다시 하고 한 단계, ${L.GAP2}일 이상이면 두 단계 낮춰요.</p>` : '';
   }
 
   // ---------- 그리기 ----------
@@ -230,7 +273,7 @@
     if (!data.started && !data.logs.length && data.cfg.startDate !== today) data.cfg.startDate = today;
     const m = model(weekMon + 6);
     renderHeader(m);
-    if (tab === 'week') renderWeek(m);
+    if (tab === 'week') { renderGaps(m); renderWeek(m); }
     if (tab === 'plan') renderPlan();
     if (tab === 'chart') renderChart();
     if (tab === 'settings' && !$('view-settings').childElementCount) renderSettings();
@@ -325,6 +368,7 @@
       if (isLog) tags += failed ? '<span class="tag bad">일부 실패</span>' : partial ? '<span class="tag line">일부만 함</span>' : '<span class="tag ok">완료</span>';
       if (projected) tags += '<span class="tag line">예상</span>';
       let meta = `세션 ${e.no} · ${e.pos + 1}/6 · ${stageText(e.main)}`;
+      if (e.rows[0].restart) meta += ` · 하체를 ${e.rows[0].restart}일 쉬어서 세션을 처음부터`;
       if (isLog && e.rows[0].result == null) meta += ` · ${TYPE_NAME[type]}를 안 해서 다음 날도 ${TYPE_NAME[type]} 날`;
       if (e.restSkipped) meta += ' · 지난 세션 중 2일 이상 쉬어서 정식 휴식 없이 이어가요';
       let foot = '';
@@ -354,7 +398,7 @@
       const dates = s.firstDay == null ? '' : `${md(s.firstDay)}–${s.lastDay !== s.firstDay ? md(s.lastDay) : ''}`;
       const cls = [isCur ? 'cur' : i > sim.real.main ? 'proj' : '', p.main.stage === 1 && i > 0 ? 'bundle-start' : ''].join(' ');
       h += `<tr class="${cls}"><td><div class="sno">${s.no}</div><div class="sdate">${isCur ? `진행 중 ${m.cur.n}/6` : dates}</div></td>`;
-      h += `<td class="stage">${esc(stageText(p.main))}${p.main.retry ? '<br>재도전' : ''}</td>`;
+      h += `<td class="stage">${esc(stageText(p.main))}${p.main.retry ? '<br>재도전' : ''}${p.main.rested ? '<br>쉬어서 낮춤' : ''}</td>`;
       h += `<td><span class="w">${L.roundW(p.main.dl)}</span>${mark(real ? s.out : null)}</td>`;
       h += `<td><span class="w">${L.roundW(p.main.sq)}</span>${mark(real ? s.out : null)}</td>`;
       for (const a of cfg.acc) {
@@ -366,7 +410,8 @@
         const behind = i === ai && ai < sim.real.main ? '<span class="rp"> 밀림</span>' : '';
         const w = L.fmtW(q).replace('kg', '');
         const switched = q.mode !== a.mode || q.name !== a.name ? `<span class="rp"> ${esc(q.name !== a.name ? q.name : modeName(q.mode))}</span>` : '';
-        h += `<td><span class="w">${esc(w)}</span> <span class="rp">×${q.reps}</span>${mark(out)}${behind}${switched}</td>`;
+        const rested = q.rested ? '<span class="rp"> 쉬어서 낮춤</span>' : '';
+        h += `<td><span class="w">${esc(w)}</span> <span class="rp">×${q.reps}</span>${mark(out)}${behind}${rested}${switched}</td>`;
       }
       h += '</tr>';
     }
@@ -751,8 +796,11 @@
     if (back && document.contains(back)) back.focus();
   }
   // 새 기록은 마지막 기록 다음 차례, 고치기는 그 날 기록 당시의 차례.
+  // 지난 날을 새로 기록할 때는 그 날까지 쉰 날 수로 다시 계산한다 (오래 쉬면 처음부터 다시 하는 규칙이 날짜마다 달라서).
   function sheetInfo(m) {
-    return sheet.mode === 'new' ? m.sim.next : m.sim.days.get(sheet.day);
+    if (sheet.mode !== 'new') return m.sim.days.get(sheet.day);
+    if (sheet.day === m.sim.cursor) return m.sim.next;
+    return L.simulate(data.cfg, data.logs, L.toStr(sheet.day), { until: -Infinity }).next;
   }
   function renderSheet(m) {
     if (sheet.kind === 'start') { renderStart(); return; }
@@ -765,7 +813,10 @@
     const isLast = sheet.mode === 'edit' && sheet.li === data.logs.length - 1;
     let h = `<div><h2 id="sheetTitle">${longDate(sheet.day)} · ${TYPE_NAME[info.type]}</h2>
       <div class="sub">세션 ${info.no} · ${info.pos + 1}/6 · ${esc(stageText(info.main))}</div></div>
-      <p class="small">목표 횟수×세트를 모두 채웠으면 성공, 한 세트라도 못 채웠으면 실패예요. <strong>하지 않은 종목은 비워 두세요.</strong> 다음 ${TYPE_NAME[info.type]} 날로 밀려요. 누른 버튼을 한 번 더 누르면 선택이 풀려요.</p>
+      <p class="small">목표 횟수×세트를 모두 채웠으면 성공, 한 세트라도 못 채웠으면 실패예요. <strong>하지 않은 종목은 비워 두세요.</strong> 다음 ${TYPE_NAME[info.type]} 날로 밀려요. 누른 버튼을 한 번 더 누르면 선택이 풀려요.</p>`;
+    const restarted = rows.filter((r) => r.restart);
+    if (restarted.length) h += `<p class="small note">오래 쉬어서 세션을 처음부터 다시 해요: ${restarted.map((r) => `${esc(r.main ? '데드리프트·스쿼트' : r.name)} ${r.restart}일 쉼 → ${STEPS[r.rested] || r.rested} 단계 낮춤`).join(', ')}</p>`;
+    h += `
       <div class="lrows">`;
     for (const r of rows) {
       const v = sheet.res[r.id];
@@ -1011,18 +1062,20 @@
   // 종목의 지금 (오늘 예상은 빼고 기록만으로 계산):
   //   no = 훈련방식·무게를 지금 바꾸면 적용되는 세션 (진행 중인 세션을 이미 한 번이라도 했으면 다음 세션),
   //   logged = 지금 훈련방식 구간에 이미 한 기록이 있는가, w = 진행 중인(다음) 세션의 무게.
+  //   오래 쉬어서 처음부터 다시 하는 세션도 그 전에 한 기록(past)이 있으면 이미 한 것으로 본다.
   const logSim = () => L.simulate(data.cfg, data.logs, today, { until: -Infinity });
   function exNow(a, sim = logSim()) {
     const ss = sim.acc[a.id] || [];
     const sess = ss[sim.real.acc[a.id]];
     const st = sess && sess.state;
     const c = curSeg(a);
+    const did = (s) => s.res.length > 0 || s.past > 0;
     // 진행 중인 세션이 상체·팔이 쉬는 세션이면 실제로 하는 다음 세션부터라고 알린다.
-    const v = sess && !sess.res.length ? sim.view(sess.no) : null;
+    const v = sess && !did(sess) ? sim.view(sess.no) : null;
     const rest = !!(v && v.acc[a.id] && v.acc[a.id].skip);
     return {
-      no: sess ? sess.no + (sess.res.length || rest ? 1 : 0) : sim.cur.no,
-      logged: ss.some((s) => s.no >= (c.no || 1) && s.res.length > 0),
+      no: sess ? sess.no + (did(sess) || rest ? 1 : 0) : sim.cur.no,
+      logged: ss.some((s) => s.no >= (c.no || 1) && did(s)),
       w: st && st.w != null ? r2(a.prog === 'r' ? L.stepW(data.cfg, a, st.mode, st.w, st.step) : st.w) : null,
     };
   }
@@ -1141,6 +1194,8 @@
       <li>기록할 때 한 종목만 골라도 저장돼요. 고르지 않은 종목은 안 한 것으로 보고 다음 같은 날(데드 날·스쿼트 날)로 밀려요. 하체를 안 했으면 다음 날도 같은 하체 날이에요.</li>
       <li>상체·팔은 자기 하체 날에만 하고 하체보다 앞서 가지 않아요. 밀린 종목은 지난 세션 몫부터 차례로 하고, 하체를 따라가느라 쉬는 날은 휴식으로 봐요.</li>
       <li>한 세션(운동 6회)을 하는 동안 2일 이상 쉬었다면 세션 뒤 정식 휴식은 건너뛰어요.</li>
+      <li>한 종목을 ${L.GAP1}일 이상 쉬면(그 종목을 마지막으로 한 다음 날부터 센 날 수) 성공·실패와 상관없이 그 종목의 세션을 처음부터 다시 하고 한 단계 낮춰요. 횟수 고정은 무게 한 단계(−5% 등), 무게 고정은 횟수 한 단계예요. ${L.GAP2}일 이상이면 한 단계 더 낮춰요. 그 뒤로도 실패하면 다음 세션에 한 단계 낮추는 건 그대로예요.</li>
+      <li>하체는 데드리프트·스쿼트 중 더 오래 쉰 쪽으로 세고, 하체 세션을 처음부터 다시 하면 그 세션의 상체·팔도 처음부터 해요(무게는 종목마다 쉰 날 수대로). 상체·팔이 쉬는 하체 마지막 단계 세션은 쉬는 날로 세지 않고, 고무밴드는 낮추지 않아요. 쉰 지 ${L.GAP1 - 2}·${L.GAP1 - 1}일째 되는 날엔 이번 주 화면 위에 알려줘요.</li>
       <li>휴식일에도 운동했다면 기록할 수 있고, 기록하면 운동한 날로 계산해요.</li>
       <li>이미 하던 루틴이면 시작 지점을 그 세션·순서·무게로 옮기고, 그 뒤 지난 날들을 날짜순으로 기록해 이어가요.</li>
       <li>데드리프트 = 스쿼트 × 1.2. 둘은 한 묶음으로 같이 오르내려요. 하체를 하나라도 실패하면 다음 세션은 한 단계 낮춰 다시 해요.</li>

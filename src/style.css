@@ -103,6 +103,10 @@ main.wrap { padding-block: 14px 120px; display: grid; gap: 14px; }
 }
 .notice p { margin: 0; }
 .notice .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 오래 쉬면 처음부터 다시 하는 종목 알림 */
+.notice.gapnote { border-left: 4px solid var(--sq); gap: 8px; }
+.gapnote ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; }
+.gapnote li b { font-weight: 600; }
 
 .day { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; scroll-margin-top: 190px; }
 .day.is-today { border-color: var(--dl); box-shadow: 0 0 0 1px var(--dl); }
@@ -138,10 +142,11 @@ main.wrap { padding-block: 14px 120px; display: grid; gap: 14px; }
 .ex .c-s { width: 26px; text-align: center; font-weight: 700; }
 .ex .nm { font-weight: 600; line-height: 1.3; }
 .ex .pt { font-size: 12px; color: var(--muted); }
-.ex .flag { font-size: 11px; font-weight: 600; border-radius: 4px; padding: 0 5px; margin-left: 4px; vertical-align: 1px; white-space: nowrap; }
+.flag { font-size: 11px; font-weight: 600; border-radius: 4px; padding: 0 5px; margin-left: 4px; vertical-align: 1px; white-space: nowrap; }
 .flag.hold { background: var(--soft); color: var(--muted); }
 .flag.retry { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
 .flag.lag { background: color-mix(in srgb, var(--sq) 22%, transparent); color: var(--ink); }
+.flag.rest { background: color-mix(in srgb, var(--dl) 14%, transparent); color: var(--ink); }
 .ex tr.undone td { color: var(--muted); }
 .ex tr.undone .c-w, .ex tr.undone .c-r { opacity: .6; }
 .no-t { color: var(--muted); }

@@ -6,6 +6,7 @@ const RoutineLogic = (() => {
   const SLOTS = 6;          // 세션 = 운동 6회 (데드·스쿼트 번갈아 3회씩)
   const MAIN_STAGES = 4;    // 하체 묶음 = 4세션 (횟수 고정일 때)
   const ACC_TOP = 2;        // 횟수 고정 보조 종목의 무게 사다리 = 3단계 (기본·+1칸·+2칸)
+  const GAP1 = 5, GAP2 = 10; // 한 종목을 이만큼 쉬면 세션을 처음부터 다시 하고 한 단계(GAP2일이면 두 단계) 낮춘다
   const PLATE_OPTIONS = [0.25, 0.5, 1, 1.25, 1.5, 2];  // 고를 수 있는 경량원판(종류별 한 쌍)
   const BIG_PLATES = [20, 15, 10, 5];                    // 어느 헬스장에나 있는 원판(2.5kg은 따로)
 
@@ -37,6 +38,7 @@ const RoutineLogic = (() => {
   //   chg: 기록 중에 훈련방식을 바꾼 내역 [{no, mode, w, name}]. 그 종목의 세션 no부터 새 방식·무게로 다시 시작한다.
   // from: 시작 지점. 시작일에 하는 운동이 세션 no의 k번째(0부터) 운동이고, 그 세션의 하체 단계가 stage.
   //       시작 무게(main.dl, acc[].w)는 이 세션의 무게. acc[id]에는 보조 종목의 단계(step·n)를 따로 둘 수 있다.
+  // restFrom: 오래 쉬면 처음부터 다시 하는 규칙을 이 날부터 적용한다 (규칙이 생기기 전에 한 기록은 그대로).
   const CATALOG = [
     { id: 'lat', name: '랫풀다운', part: '등', day: 'D', mode: 'stack', w: 23, prog: 'w', reps: 3, ladder: [3, 4, 5], sets: 3, rest: '3~5분', inc: 'pct', incV: 5 },
     { id: 'curl', name: '덤벨컬', part: '이두', day: 'D', mode: 'dumbbell', w: 3, prog: 'w', reps: 5, ladder: [5, 6, 7], sets: 3, rest: '2분', inc: 'kg', incV: 1 },
@@ -68,6 +70,7 @@ const RoutineLogic = (() => {
     return {
       cv: 3,
       startDate: today,
+      restFrom: today,
       from: { no: 1, k: 0, stage: 1, acc: {} },
       plates: [1.25],
       gear: defaultGear(),
@@ -196,7 +199,7 @@ const RoutineLogic = (() => {
     const base = { dl, sq: dl / cfg.main.ratio, level: m.level, bundle: m.bundle, retry: m.fail };
     if (cfg.main.prog === 'w') {
       const n = ladderOf(cfg.main).length;
-      return Object.assign(base, { stage: m.step >= 0 ? m.step + 1 : 0, top: n >= 3 && m.step === n - 1, reps: ladderReps(cfg.main, m.step) });
+      return Object.assign(base, { stage: m.step + 1, top: n >= 3 && m.step === n - 1, reps: ladderReps(cfg.main, m.step) });
     }
     return Object.assign(base, { stage: m.level - m.start + 1, top: m.level === m.start + MAIN_STAGES - 1, reps: cfg.main.reps });
   }
@@ -232,43 +235,39 @@ const RoutineLogic = (() => {
     return { main, acc };
   }
 
+  // 한 단계 낮춘 상태 (실패했을 때·오래 쉬었을 때). 하체: 횟수 고정은 무게 한 단계(−5%), 무게 고정은 횟수 한 단계.
+  function lowerMain(cfg, st) {
+    const m = Object.assign({}, st);
+    if (cfg.main.prog === 'w') m.step = Math.max(-9, m.step - 1); else m.level -= 1;
+    return m;
+  }
+  // 보조 종목: 사다리 한 칸 아래. 한 칸 낮춰도 무게·횟수가 같으면(가진 무게 중 가장 가벼움, 1회) 그 칸 그대로.
+  function lowerAcc(cfg, a, st) {
+    const s = Object.assign({}, st);
+    const at = (k) => (a.prog === 'r' ? stepW(cfg, a, s.mode, s.w, k) : ladderReps(a, k));
+    const same = s.w != null || a.prog !== 'r' ? at(s.step - 1) === at(s.step) : false;
+    if (!same) s.step = Math.max(-9, s.step - 1);
+    return s;
+  }
   // 하체 한 세션의 결과로 다음 상태. bundleDone = 묶음을 마침.
   function advanceMain(cfg, st, ok) {
-    const m = Object.assign({}, st);
+    if (!ok) return { m: Object.assign(lowerMain(cfg, st), { fail: true }), bundleDone: false };
+    const m = Object.assign({}, st, { fail: false });
     let bundleDone = false;
     if (cfg.main.prog === 'w') {
-      const n = ladderOf(cfg.main).length;
-      if (ok) {
-        if (m.step >= n - 1) { m.level += 1; m.step = 0; m.bundle += 1; bundleDone = true; } else m.step += 1;
-        m.fail = false;
-      } else { m.step = Math.max(-9, m.step - 1); m.fail = true; }
-      return { m, bundleDone };
-    }
-    if (ok) {
-      if (m.level === m.start + MAIN_STAGES - 1) { m.start += 1; m.level = m.start; m.bundle += 1; bundleDone = true; }
-      else m.level += 1;
-      m.fail = false;
-    } else {
-      m.level -= 1; m.fail = true;
-    }
+      if (m.step >= ladderOf(cfg.main).length - 1) { m.level += 1; m.step = 0; m.bundle += 1; bundleDone = true; } else m.step += 1;
+    } else if (m.level === m.start + MAIN_STAGES - 1) { m.start += 1; m.level = m.start; m.bundle += 1; bundleDone = true; }
+    else m.level += 1;
     return { m, bundleDone };
   }
   // 보조 종목 한 세션의 결과(r: true·false, 쉰 세션은 null)로 다음 상태. 고무밴드는 기록만 하고 바뀌지 않는다.
-  // 사다리 마지막 칸을 성공하면 한 칸 올린 무게로 첫 칸부터 (횟수 고정: 무게 3단계 중 2단계 무게부터).
+  // 사다리 마지막 칸을 성공하면 한 칸 올린 무게로 첫 칸부터 (횟수 고정: 무게 3단계 중 2단계 무게부터). 실패하면 한 칸 낮춰 다시.
   function advanceAcc(cfg, a, st, r) {
-    const s = Object.assign({}, st);
-    if (r == null || s.mode === 'band') return s;
-    if (r) {
-      if (s.step < accTop(a)) s.step += 1;
-      else { s.w = stepW(cfg, a, s.mode, s.w, 1); s.n += 1; s.step = 0; }
-      s.fail = false;
-    } else {
-      // 한 칸 낮춰도 무게·횟수가 같으면(가진 무게 중 가장 가벼움, 1회) 같은 칸에서 다시 한다.
-      const at = (k) => (a.prog === 'r' ? stepW(cfg, a, s.mode, s.w, k) : ladderReps(a, k));
-      const same = s.w != null || a.prog !== 'r' ? at(s.step - 1) === at(s.step) : false;
-      s.step = same ? s.step : Math.max(-9, s.step - 1);
-      s.fail = true;
-    }
+    if (r == null || st.mode === 'band') return Object.assign({}, st);
+    if (!r) return Object.assign(lowerAcc(cfg, a, st), { fail: true });
+    const s = Object.assign({}, st, { fail: false });
+    if (s.step < accTop(a)) s.step += 1;
+    else { s.w = stepW(cfg, a, s.mode, s.w, 1); s.n += 1; s.step = 0; }
     return s;
   }
   function advance(cfg, st, out) {
@@ -308,6 +307,11 @@ const RoutineLogic = (() => {
   // 세션 6번째 운동 다음 날은 정식 휴식. 단, 그 세션을 하는 동안 REST_SKIP일 이상 쉬었다면 건너뛴다.
   // 휴식일에도 기록하면 운동한 날로 계산한다.
   // 기록 형식: {d, res:{종목id: true|false}, p:1}. p가 없는 예전 기록은 고르지 않은 종목을 성공으로 본다.
+  // 오래 쉬면 처음부터: 한 종목을 GAP1일 이상 쉬면(마지막으로 한 다음 날부터 다시 하는 날 전날까지 센 날 수) 성공·실패와 상관없이
+  //   그 종목의 진행 중인 세션을 처음부터 다시 하고 한 단계 낮춘다. GAP2일 이상이면 한 단계 더 (한 번 쉬는 동안 두 단계까지).
+  //   하체는 데드리프트·스쿼트 중 더 오래 쉰 쪽으로 세고, 세션(6회)을 데드리프트부터 다시 한다. 둘은 같이 낮아진다.
+  //   상체·팔은 종목마다 따로 센다. 하체가 마지막 단계라 상체·팔이 쉬는 세션은 쉬는 날로 세지 않고, 고무밴드는 낮추지 않는다.
+  //   그 종목을 한 번도 하지 않았으면 세지 않는다. cfg.restFrom 이전 날에는 적용하지 않는다.
   const REST_SKIP = 2;
   const accSlot = (type, j) => SLOTS * Math.floor(j / 3) + 2 * (j % 3) + (type === 'S' ? 1 : 0);
 
@@ -388,6 +392,11 @@ const RoutineLogic = (() => {
   function simulate(cfg, logs, today, opts = {}) {
     const sp = startPoint(cfg);
     const init = initState(cfg);
+    const rr = cfg.restFrom ? toNum(cfg.restFrom) : -Infinity;
+    // R일 쉬고 day에 하면 이번에 쉬는 동안 낮출 단계 수
+    const gapDrops = (R, day) => (day < rr ? 0 : R >= GAP2 ? 2 : R >= GAP1 ? 1 : 0);
+    // 하체가 쉬는 동안: 데드리프트·스쿼트를 마지막으로 한 날, 지금 세는 쉬는 기간의 시작(anchor)과 그동안 낮춘 단계 수
+    const MG = { D: null, S: null, anchor: null, dropped: 0 };
     const S = [];
     const openMain = (i, m) => {
       S[i] = { no: sp.no + i, i, state: m, presc: mainPresc(cfg, m), first: i === 0 ? sp.k : 0, n: i === 0 ? sp.k : 0, res: [],
@@ -405,8 +414,9 @@ const RoutineLogic = (() => {
     openMain(0, init.main);
     anchorMain(mainSnapOf(0));
     const openAcc = (X, i, st) => { X.sess[i] = { no: sp.no + i, i, state: i ? openState(X.a, st, sp.no + i) : st, presc: null, res: [], done: false, out: null, snap: null }; };
+    // 보조 종목 X: i 세션, j 지금까지 한 차례 수, last 마지막으로 한 날(쉬는 세션 동안은 하체를 한 날), anchor·dropped는 하체와 같다.
     const A = cfg.acc.map((a) => {
-      const X = { a, i: 0, j: jStart(a.day, sp.k), sess: [] };
+      const X = { a, i: 0, j: jStart(a.day, sp.k), sess: [], last: null, anchor: null, dropped: 0 };
       openAcc(X, 0, init.acc[a.id]);
       return X;
     });
@@ -418,7 +428,7 @@ const RoutineLogic = (() => {
         const i = X.i, s = X.sess[i];
         const p = accP(X, i);
         if (p.off || p.skip) X.j = Math.max(X.j, 3 * (i + 1));
-        else if (X.a.fromK > 0 && s.no === X.a.from) X.j = Math.max(X.j, 3 * i + jStart(X.a.day, X.a.fromK));
+        else if (X.a.fromK > 0 && s.no === X.a.from && !s.full) X.j = Math.max(X.j, 3 * i + jStart(X.a.day, X.a.fromK));
         if (X.j < 3 * (i + 1) || !S[i].done) return;
         s.done = true;
         s.out = p.off || p.skip ? null : !s.res.includes(false);
@@ -427,28 +437,73 @@ const RoutineLogic = (() => {
       }
     }
     let g = sp.k;
+    // 오래 쉬었으면 하체 세션을 처음부터(데드리프트부터) 다시 하고 낮춘다. 기록한 날이면 그날 남긴 상태(sn)로 맞춘다.
+    function restMain(day, sn) {
+      const seen = [MG.D, MG.S].filter((x) => x != null);
+      if (!seen.length) return;
+      const from = Math.min(...seen);
+      if (from !== MG.anchor) { MG.anchor = from; MG.dropped = 0; }
+      const R = day - from - 1, t = gapDrops(R, day);
+      if (t <= MG.dropped) return;
+      const cur = S[S.length - 1];
+      let st = Object.assign({}, cur.state, { fail: false });
+      for (let k = MG.dropped; k < t; k++) st = lowerMain(cfg, st);
+      g = SLOTS * cur.i;
+      Object.assign(cur, { state: st, presc: mainPresc(cfg, st), first: 0, n: 0, res: [], firstDay: null, lastDay: null, rests: 0, snap: null,
+        reset: { day, R, drops: (cur.reset ? cur.reset.drops : 0) + t - MG.dropped } });
+      MG.dropped = t;
+      // 같은 세션의 상체·팔도 그 세션을 처음부터(3번) 다시 한다. 무게는 그 종목을 쉰 날 수대로 따로 낮춘다.
+      // 처방도 다시 구한다 (하체가 마지막 단계에서 내려오면 이번 세션은 쉬지 않고 한다).
+      for (const X of A) {
+        if (X.i !== cur.i) continue;
+        const s = X.sess[X.i];
+        Object.assign(s, { presc: null, past: (s.past || 0) + s.res.length, res: [], snap: null, full: true });
+        X.j = 3 * X.i;
+      }
+      anchorMain(sn);
+    }
+    // 보조 종목 X를 오래 쉬었으면 그 종목의 진행 중인 세션을 처음부터(3번) 다시 하고 낮춘다. 낮췄으면 true.
+    function restAcc(X, day) {
+      const s = X.sess[X.i];
+      if (X.last == null || s.state.mode === 'band') return false;
+      if (X.last !== X.anchor) { X.anchor = X.last; X.dropped = 0; }
+      const R = day - X.last - 1, t = gapDrops(R, day);
+      if (t <= X.dropped) return false;
+      let st = Object.assign({}, s.state, { fail: false });
+      for (let k = X.dropped; k < t; k++) st = lowerAcc(cfg, X.a, st);
+      X.j = 3 * X.i;
+      // past = 처음부터 다시 하느라 지운 기록 수 (그 세션에 이미 한 기록이 있었다는 표시)
+      Object.assign(s, { state: st, presc: null, past: (s.past || 0) + s.res.length, res: [], snap: null, full: true,
+        reset: { day, R, drops: (s.reset ? s.reset.drops : 0) + t - X.dropped } });
+      X.dropped = t;
+      return true;
+    }
     // 그 날 할 운동: 하체 칸 g의 하체 + 그 날에 붙는 보조 종목들의 다음 차례.
     // avail: ok(오늘 함) · skip(하체가 마지막 단계라 쉼) · wait(하체보다 앞서지 않으려고 쉼). lag = 지난 차례가 밀려서 하는 것.
+    // rested = 그 세션을 오래 쉬어서 낮춘 단계 수, restart = 그 날 처음부터 다시 시작했으면 그때 쉰 날 수.
     // snaps: 기록한 날이면 그날 남긴 상태 (그 종목 세션의 첫 기록이면 그 상태로 맞춘다). 행마다 지금 상태(snap)를 붙인다.
-    function plan(snaps) {
+    const restOf = (s, day) => ({ rested: s.reset ? s.reset.drops : 0, restart: s.reset && s.reset.day === day ? s.reset.R : 0 });
+    function plan(day, snaps) {
+      restMain(day, snaps && snaps.main);
       const i = S.length - 1, type = slotType(g);
-      const rows = [Object.assign(mainRow(cfg, S[i].presc, type), { avail: 'ok', snap: mainSnap(cfg, S[i]) })];
+      const rows = [Object.assign(mainRow(cfg, S[i].presc, type), { avail: 'ok', snap: mainSnap(cfg, S[i]) }, restOf(S[i], day))];
       for (const X of A) {
         if (X.a.day !== type) continue;
         settle(X);
         let p = accP(X, X.i);
         if (p.off) continue;
         if (p.skip) { rows.push(Object.assign(accRow(X.a, p), { avail: 'skip' })); continue; }
+        if (restAcc(X, day)) p = accP(X, X.i);
         const at = accSlot(X.a.day, X.j), s = X.sess[X.i];
         const sn = snaps && snaps[X.a.id];
         if (sn && at <= g && !s.res.length && !s.snap) { s.snap = sn; s.state = accFromSnap(cfg, X.a, s.state, sn); s.presc = null; p = accP(X, X.i); }
-        rows.push(Object.assign(accRow(X.a, p), { avail: at <= g ? 'ok' : 'wait', lag: at < g, accNo: s.no, snap: accSnap(X.a, s.state, p) }));
+        rows.push(Object.assign(accRow(X.a, p), { avail: at <= g ? 'ok' : 'wait', lag: at < g, accNo: s.no, snap: accSnap(X.a, s.state, p) }, restOf(s, day)));
       }
       return { g, slot: g, type, no: S[i].no, pos: slotPos(g), main: S[i].presc, rows };
     }
     // 기록한 날은 그때 보여준 무게·횟수·세트·단계를 그대로 보여준다.
     const snapMain = (p, m) => Object.assign({}, p, { dl: m.W, sq: m.W / cfg.main.ratio, reps: m.r, bundle: m.b, retry: !!m.f,
-      stage: m.k === 'w' ? (m.t >= 0 ? m.t + 1 : 0) : m.l - m.s + 1 });
+      stage: m.k === 'w' ? m.t + 1 : m.l - m.s + 1 });
     function shown(info, sn) {
       const ratio = cfg.main.ratio;
       if (sn.main && sn.main.W != null) info.main = snapMain(info.main, sn.main);
@@ -468,10 +523,17 @@ const RoutineLogic = (() => {
         const X = A.find((x) => x.a.id === r.id);
         X.sess[X.i].res.push(r.result);
         X.j += 1;
+        X.last = d;
       }
       const mv = info.rows[0].result;
       const cur = S[S.length - 1];
       if (mv != null) {
+        MG[info.type] = d;
+        // 쉬어서 처음부터 다시 시작한 뒤 첫 하체를 하면 그 쉬는 기간은 데드리프트·스쿼트 모두 끝난 것으로 본다
+        // (다음 날 스쿼트가 그동안 쉰 날 수로 또 낮아지지 않게).
+        if (MG.dropped) MG.D = MG.S = d;
+        // 하체가 마지막 단계라 쉬는 세션 동안 상체·팔은 쉬는 날로 세지 않는다.
+        for (const X of A) if (X.last != null && X.i === cur.i && accP(X, X.i).skip) X.last = d;
         if (cur.firstDay == null) cur.firstDay = d;
         cur.lastDay = d;
         cur.res.push(mv);
@@ -505,7 +567,7 @@ const RoutineLogic = (() => {
       const ld = toNum(lg.d);
       for (; d < ld; d++) quiet(d);
       const sn = lg.s || null;
-      const info = plan(sn);
+      const info = plan(ld, sn);
       // 고무밴드는 기록한 날 쓴 밴드를 남긴다 (설정에서 밴드를 바꿔도 지난 기록은 그대로).
       if (lg.b) for (const r of info.rows) if (r.band && Array.isArray(lg.b[r.id])) r.bands = lg.b[r.id].slice();
       if (sn) shown(info, sn);
@@ -516,7 +578,17 @@ const RoutineLogic = (() => {
     });
     const cursor = Math.max(T, start, last == null ? -Infinity : last + 1);
     for (; d < cursor; d++) quiet(d);
-    const next = plan();
+    // 다음 운동 날(cursor)에 할 종목마다 지금까지 쉰 날 수 (오래 쉬면 처음부터 다시 하는 규칙 알림용)
+    const seenMain = [MG.D, MG.S].filter((x) => x != null);
+    const lastOf = new Map([['main', seenMain.length ? Math.min(...seenMain) : null]].concat(A.map((X) => [X.a.id, X.last])));
+    const next = plan(cursor);
+    const gaps = [];
+    for (const r of next.rows) {
+      const from = lastOf.get(r.main ? 'main' : r.id);
+      if (r.avail !== 'ok' || r.band || from == null) continue;
+      const X = r.main ? MG : A.find((x) => x.a.id === r.id);
+      gaps.push({ id: r.id, name: r.name, main: !!r.main, rest: cursor - from - 1, dropped: X.dropped, today: !!r.restart });
+    }
     const c = S[S.length - 1];
     const cur = { i: c.i, no: c.no, n: c.n, presc: c.presc };
     const real = { main: c.i, acc: Object.fromEntries(A.map((X) => [X.a.id, X.i])) };
@@ -525,7 +597,7 @@ const RoutineLogic = (() => {
     const short = () => S.length < need || A.some((X) => X.sess.length < need);
     for (let guard = 0; (d <= until || short()) && guard < 4000; d++, guard++) {
       if (d === restDay) { days.set(d, { kind: 'gap' }); continue; }
-      const info = plan();
+      const info = plan(d);
       const res = {};
       for (const r of info.rows) if (r.avail === 'ok') res[r.id] = true;
       days.set(d, Object.assign(info, { kind: 'plan', restSkipped: d === skipNote }));
@@ -541,13 +613,14 @@ const RoutineLogic = (() => {
         const x = X.sess[i];
         if (!x) { acc[X.a.id] = { pending: true }; continue; }
         const p = accP(X, i);
-        acc[X.a.id] = x.snap && x.done && !p.off && !p.skip ? Object.assign({}, p, { w: x.snap.W, reps: x.snap.r, mode: x.snap.m }, x.snap.i ? { inc: x.snap.i, incV: x.snap.v } : {}) : p;
+        const rested = { rested: x.reset ? x.reset.drops : 0 };
+        acc[X.a.id] = x.snap && x.done && !p.off && !p.skip ? Object.assign({}, p, { w: x.snap.W, reps: x.snap.r, mode: x.snap.m }, x.snap.i ? { inc: x.snap.i, incV: x.snap.v } : {}, rested) : Object.assign({}, p, rested);
       }
       const main = s.snap && s.done && s.snap.W != null ? snapMain(s.presc, s.snap) : s.presc;
-      return { no, main, acc };
+      return { no, main: Object.assign({}, main, { rested: s.reset ? s.reset.drops : 0 }), acc };
     }
     return {
-      days, today: T, start, cursor, last, k0: sp.k, next, cur, real, view,
+      days, today: T, start, cursor, last, k0: sp.k, next, cur, real, view, gaps: { day: cursor, items: gaps },
       main: S, acc: Object.fromEntries(A.map((X) => [X.a.id, X.sess])),
     };
   }
@@ -758,7 +831,7 @@ const RoutineLogic = (() => {
   }
 
   return {
-    SLOTS, MAIN_STAGES, ACC_TOP, PLATE_OPTIONS, MODES, MODE_KEYS, CATALOG, EXTRA, toNum, toStr, weekday, mondayOf, localToday,
+    SLOTS, MAIN_STAGES, ACC_TOP, GAP1, GAP2, PLATE_OPTIONS, MODES, MODE_KEYS, CATALOG, EXTRA, toNum, toStr, weekday, mondayOf, localToday,
     defaultConfig, defaultGear, accDefaults, migrate, startPoint, accAt, accTop, mainTop, restStage, segAt, initState, prescribe, evaluate, advance,
     replay, projectTo, simulate, timeline, snapLogs, snapOf, canLog, slotType, slotNo, slotPos, REST_SKIP,
     stepW, gearList, ladderOf, ladderReps, dayRows, roundW, fmtW, plateCounts, plateMath, plateText, stackMath, stackText, chainText, loadInfo,

@@ -552,3 +552,112 @@ test('기록 고정: 무게 생략 종목(+1kg 표시)과 하체 단계도 그�
   const ss = L.replay(c, logs);
   assert.deepEqual([r1(ss[4].presc.main.dl), r1(ss[5].presc.main.dl), ss[5].presc.main.reps], [42, 44.1, 3]);
 });
+
+// ---------- 오래 쉬면 처음부터 ----------
+// 세션 1(0~5일) 매일, 6일 휴식, 세션 2를 7일부터 n번 (7 D, 8 S, 9 D, 10 S, 11 D, 12 S)
+const gapLogs = (n) => [0, 1, 2, 3, 4, 5].map((k) => P(L.toNum(TODAY) + k, k % 2 ? ALL_S : ALL_D))
+  .concat(Array.from({ length: n }, (_, i) => P(L.toNum(TODAY) + 7 + i, i % 2 ? ALL_S : ALL_D)));
+const stagesFrom = (sim, from, to) => Array.from({ length: to - from + 1 }, (_, i) => sim.view(from + i)).map((v) => `${v.main.stage}:${r1(v.main.dl)}`);
+
+test('오래 쉬면 처음부터: 스쿼트 2번 한 세션 2에서 3번째를 10일 넘게 안 하면 2번 한 것은 지우고 두 단계 낮춰 0·1·2·3·4단계로', () => {
+  const c = cfg();
+  const s = L.toNum(TODAY);
+  const logs = gapLogs(5);                                   // 스쿼트는 8·10일, 마지막 운동은 11일(데드)
+  const back = (d) => L.simulate(c, logs, L.toStr(s + d), { until: s + d + 60 });
+  const e4 = back(15).days.get(s + 15);                      // 스쿼트를 4일 쉼: 그대로 6번째(스쿼트)
+  assert.deepEqual([e4.type, e4.no, e4.pos, r1(e4.main.dl), e4.rows[0].rested], ['S', 2, 5, 42, 0]);
+  const e5 = back(16).days.get(s + 16);                      // 5일: 세션 2를 데드리프트부터 다시, 한 단계(−5%) 낮춤
+  assert.deepEqual([e5.type, e5.no, e5.pos, r1(e5.main.dl), e5.main.stage, e5.rows[0].rested, e5.rows[0].restart], ['D', 2, 0, 40, 1, 1, 5]);
+  const sim = back(21);                                      // 10일: 두 단계 → 세션 2가 0단계(1단계 직전 무게)
+  const e10 = sim.days.get(s + 21);
+  assert.deepEqual([e10.no, e10.pos, r1(e10.main.dl), e10.main.stage, e10.rows[0].rested], [2, 0, 38.1, 0, 2]);
+  assert.deepEqual(stagesFrom(sim, 2, 7), ['0:38.1', '1:40', '2:42', '3:44.1', '4:46.3', '1:42']);   // 묶음을 채우려면 0·1·2·3·4단계
+  assert.equal(sim.cur.n, 0);
+  // 다음 날 스쿼트가 그동안 쉰 날 수로 또 낮아지지 않는다
+  const e11 = sim.days.get(s + 22);
+  assert.deepEqual([e11.type, e11.no, e11.pos, r1(e11.main.dl), e11.rows[0].restart], ['S', 2, 1, 38.1, 0]);
+});
+
+test('오래 쉬면 처음부터: 하체 세션을 다시 하면 그 세션의 상체·팔도 처음부터, 무게는 종목마다 쉰 날 수대로', () => {
+  const c = cfg();
+  const s = L.toNum(TODAY);
+  const sim = L.simulate(c, gapLogs(5), L.toStr(s + 21), { until: s + 30 });
+  const d1 = sim.days.get(s + 21), s1 = sim.days.get(s + 22);
+  // 데드 날 종목은 11일에 마지막으로 해서 9일 쉼 → 한 단계, 스쿼트 날 종목은 10일이 마지막이라 다음 날 11일 쉼 → 두 단계
+  assert.deepEqual(['lat', 'curl', 'ohp'].map((id) => [rowOf(d1, id).avail, rowOf(d1, id).reps, rowOf(d1, id).rested]), [['ok', 3, 1], ['ok', 5, 1], ['ok', 5, 1]]);
+  assert.deepEqual(['press', 'side'].map((id) => [rowOf(s1, id).avail, rowOf(s1, id).reps, rowOf(s1, id).rested, rowOf(s1, id).restart]), [['ok', 2, 2, 11], ['ok', 9, 2, 11]]);
+  const v3 = sim.view(3);                                    // 다음 세션은 다시 단계대로 (실패 없음)
+  assert.deepEqual([v3.acc.lat.reps, v3.acc.press.reps, v3.acc.lat.rested], [4, 3, 0]);
+  // 하체만 4일 쉬면 그대로 (상체도)
+  const e = L.simulate(c, gapLogs(5), L.toStr(s + 15), { until: s + 16 }).days.get(s + 15);
+  assert.ok(e.rows.every((r) => !r.rested));
+});
+
+test('오래 쉬면 처음부터: 한 종목만 계속 안 하면 그 종목만, 쉬는 날에 그 종목을 안 했으면 10일째 한 단계 더', () => {
+  const c = cfg();
+  const s = L.toNum(TODAY);
+  const noCurl = { dl: true, lat: true, ohp: true };
+  // 덤벨컬은 0일에만 하고 2·4일(세션 1)은 안 함 → 6일째 운동(세션 2 첫 데드, 7일)에 6일 쉼
+  const logs = [0, 1, 2, 3, 4, 5].map((k) => P(s + k, k % 2 ? ALL_S : k ? noCurl : ALL_D));
+  const sim = L.simulate(c, logs.concat(P(s + 7, noCurl)), L.toStr(s + 8), { until: s + 12 });
+  const d7 = sim.days.get(s + 7);
+  assert.deepEqual([rowOf(d7, 'curl').rested, rowOf(d7, 'curl').restart, rowOf(d7, 'curl').reps, rowOf(d7, 'lat').rested], [1, 6, 4, 0]);
+  assert.equal(rowOf(d7, 'curl').result, null);                // 이 날도 안 함 → 같은 쉬는 기간
+  const d9 = sim.days.get(s + 9);                            // 8일 쉼: 아직 한 단계
+  assert.deepEqual([rowOf(d9, 'curl').rested, rowOf(d9, 'curl').restart], [1, 0]);
+  const sim2 = L.simulate(c, logs.concat(P(s + 7, noCurl), P(s + 8, ALL_S), P(s + 9, noCurl), P(s + 10, ALL_S)), L.toStr(s + 11), { until: s + 12 });
+  const d11 = sim2.days.get(s + 11);                         // 10일 쉼 → 두 단계 (5회 → 3회)
+  assert.deepEqual([rowOf(d11, 'curl').rested, rowOf(d11, 'curl').restart, rowOf(d11, 'curl').reps, rowOf(d11, 'curl').lag], [2, 10, 3, true]);
+  assert.deepEqual(sim2.days.get(s + 11).rows.filter((r) => r.rested).map((r) => r.id), ['curl']);
+});
+
+test('오래 쉬면 처음부터: 하체 마지막 단계 세션(상체·팔이 쉼)은 쉬는 날로 세지 않고, 그 세션 중에 오래 쉬면 하체가 내려와 상체도 한다', () => {
+  const c = cfg();
+  const s = L.toNum(TODAY);
+  const logs = [];
+  let d = s;
+  for (let i = 0; i < 4; i++) { for (let k = 0; k < 6; k++) logs.push(P(d++, k % 2 ? ALL_S : ALL_D)); d++; }
+  const sim = L.simulate(c, logs, L.toStr(d), { until: d + 3 });   // 세션 4(4단계)는 상체가 쉬고 지금은 세션 5
+  assert.ok(sim.days.get(d).rows.every((r) => !r.rested));
+  assert.equal(rowOf(sim.days.get(d), 'lat').reps, 3);
+  // 세션 4 세 번째 운동 뒤 7일 쉼 → 하체 3단계로, 상체·팔은 이번 세션을 쉬지 않고 한 단계 낮춰서
+  const part = logs.slice(0, 21);
+  const back = L.toNum(part[20].d) + 8;
+  const e = L.simulate(c, part, L.toStr(back), { until: back + 2 }).days.get(back);
+  assert.deepEqual([e.no, e.pos, e.main.stage, e.main.top, rowOf(e, 'lat').avail, rowOf(e, 'lat').reps, rowOf(e, 'lat').rested], [4, 0, 3, false, 'ok', 2, 1]);
+});
+
+test('오래 쉬면 처음부터: 무게 고정 하체는 횟수 한 단계, 고무밴드는 낮추지 않고, 규칙이 생기기 전(restFrom 이전) 기록은 그대로', () => {
+  const s = L.toNum(TODAY);
+  const c = cfg();
+  c.main.prog = 'w'; c.main.ladder = [3, 4, 5];
+  const pull = L.accDefaults(L.EXTRA.find((x) => x.id === 'pullup'));
+  pull.bands = ['1번밴드'];
+  c.acc.push(pull);
+  const logs = gapLogs(2).map((l) => Object.assign({}, l, { res: Object.assign({ pullup: true }, l.res) }));   // 세션 2: 데드·스쿼트 1번씩(4회)
+  const e = L.simulate(c, logs, L.toStr(s + 15), { until: s + 16 }).days.get(s + 15);
+  assert.deepEqual([e.type, e.pos, r1(e.main.dl), e.main.reps, e.rows[0].rested], ['D', 0, 40, 3, 1]);    // 4회 → 3회 (무게 그대로)
+  assert.deepEqual([rowOf(e, 'pullup').rested, rowOf(e, 'pullup').reps], [0, 5]);
+  const old = cfg();
+  old.restFrom = L.toStr(s + 16);                           // 15일에는 아직 규칙 없음
+  assert.ok(L.simulate(old, gapLogs(2), L.toStr(s + 15), { until: s + 15 }).days.get(s + 15).rows.every((r) => !r.rested));
+  assert.equal(L.simulate(old, gapLogs(2), L.toStr(s + 16), { until: s + 16 }).days.get(s + 16).rows[0].rested, 1);
+});
+
+test('오래 쉬면 처음부터: 처음부터 다시 한 날을 기록하면 그때 무게가 남아 설정을 바꿔도 그대로, 알림은 쉰 지 3·4일째부터', () => {
+  const c = cfg();
+  const s = L.toNum(TODAY);
+  const sheet = L.simulate(c, gapLogs(5), L.toStr(s + 17), { until: -Infinity }).next;    // 17일(6일 쉼)에 한 운동
+  const logs = L.snapLogs(c, gapLogs(5)).concat(Object.assign(P(s + 17, ALL_D), { s: L.snapOf(sheet.rows, (r) => r.id in ALL_D) }));
+  const before = loggedRows(c, logs, 'dl').concat(loggedRows(c, logs, 'lat'));
+  assert.deepEqual(loggedRows(c, logs, 'dl').slice(-1), ['40kgx5x3']);
+  c.main.prog = 'w'; c.main.ladder = [4, 5, 6];
+  c.acc.find((a) => a.id === 'lat').ladder = [5, 6, 7];
+  assert.deepEqual(loggedRows(c, logs, 'dl').concat(loggedRows(c, logs, 'lat')), before);
+  // 알림용: 다음 운동 날 할 종목의 쉰 날 수
+  const gaps = (d) => L.simulate(cfg(), gapLogs(5), L.toStr(s + d), { until: -Infinity }).gaps;
+  const g3 = gaps(14);
+  assert.equal(g3.day, s + 14);
+  assert.deepEqual(g3.items.map((x) => [x.id, x.rest, x.dropped]), [['sq', 3, 0], ['press', 3, 0], ['tri', 3, 0], ['side', 3, 0], ['rear', 3, 0]]);
+  assert.deepEqual(gaps(16).items.slice(0, 2).map((x) => [x.id, x.rest, x.dropped, x.today]), [['dl', 5, 1, true], ['lat', 4, 0, false]]);
+});
