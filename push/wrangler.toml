@@ -1,0 +1,22 @@
+# 웨이트 루틴 알림 서버. 배포: cd push && npx wrangler deploy  (비밀키는 npx wrangler secret put VAPID_PRIVATE)
+name = "routine-push"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+preview_urls = false
+
+[observability]
+enabled = true
+
+[[durable_objects.bindings]]
+name = "BOX"
+class_name = "PushBox"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PushBox"]
+
+[vars]
+VAPID_PUBLIC = "BBb9z0ezYxfSrktik_pHH6Z1D4C7ZBO5BxTkWa-ZTxYXjOgDLSXvhE73lA68Iqq5bU2cTqflqNHAHS2pl28th5E"
+VAPID_SUBJECT = "https://peanutlover.github.io/routine/"
+ALLOW_ORIGINS = "https://peanutlover.github.io"

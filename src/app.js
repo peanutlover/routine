@@ -280,6 +280,7 @@
     $('welcome').hidden = data.started || tab !== 'week';
     if (!data.started) renderPick();
     if (sheet) renderSheet(m);
+    pushRest();
   }
 
   function renderHeader(m) {
@@ -657,7 +658,10 @@
     const now = Date.now();
     const doneCount = rows.filter((r) => tState(r.id).n >= restNeed(r)).length;
     h += `<div class="sub">${longDate(L.toNum(today))} · ${TYPE_NAME[info.type]} 날 · 완료 ${doneCount}/${rows.length}종목</div></div>
-      <p class="small">세트를 마치면 그 종목의 <strong>휴식 시작</strong>을 눌러요. 종목 순서는 자유예요. 휴식이 세트 수보다 한 번 적게 끝나면(3세트면 2번) 그 종목은 완료예요.</p><div class="tmrs">`;
+      <p class="small">세트를 마치면 그 종목의 <strong>휴식 시작</strong>을 눌러요. 종목 순서는 자유예요. 휴식이 세트 수보다 한 번 적게 끝나면(3세트면 2번) 그 종목은 완료예요.</p>`;
+    if (pushCan() && !pushOn()) h += '<p class="small note">앱을 닫아도 휴식이 끝날 때 알림을 받으려면 설정 → 알림을 켜 주세요.</p>';
+    else if (!pushCan() && window.ROUTINE_STANDALONE && isIOS()) h += '<p class="small note">홈 화면에 추가한 앱으로 열면 앱을 닫아도 휴식이 끝날 때 알림을 받을 수 있어요.</p>';
+    h += '<div class="tmrs">';
     for (const r of rows) {
       const st = tState(r.id);
       const need = restNeed(r);
@@ -692,7 +696,7 @@
       }
       h += '</section>';
     }
-    h += '</div><button class="btn ghost" type="button" data-act="close">닫기 · 타이머는 계속 돌아요</button>';
+    h += `</div><button class="btn ghost" type="button" data-act="close">닫기 · 타이머는 계속 돌아요${pushOn() ? ' · 끝나면 알림' : ''}</button>`;
     const panel = $('panel');
     const top = panel.scrollTop;
     panel.innerHTML = h;
@@ -721,7 +725,10 @@
     const now = Date.now();
     let finished = null;
     for (const [id, st] of Object.entries(timer.items)) {
-      if (st.endAt && st.endAt <= now) { st.endAt = 0; st.n += 1; finished = id; }
+      if (st.endAt && st.endAt <= now) {
+        st.endAt = 0; st.n += 1; finished = id;
+        if (document.visibilityState === 'visible') pushCancel(id);   // 앱이 소리로 알렸으니 알림은 보내지 않는다
+      }
     }
     if (finished) {
       saveTimer();
@@ -752,10 +759,10 @@
       if (!audio) { try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) audio = new AC(); } catch (e) { audio = null; } }
       if (audio && audio.state === 'suspended') audio.resume().catch(() => {});
       if (r.sets <= 1) st.n = restNeed(r);
-      else { st.dur = restSec(id); st.endAt = Date.now() + st.dur * 1000; startTick(); }
-    } else if (act === 'tSkip') { st.endAt = 0; st.n += 1; }
-    else if (act === 'tUndo') st.n = Math.max(0, st.n - 1);
-    else if (act === 'tReset') { st.n = 0; st.endAt = 0; }
+      else { st.dur = restSec(id); st.endAt = Date.now() + st.dur * 1000; startTick(); pushTimer(r, st); }
+    } else if (act === 'tSkip') { st.endAt = 0; st.n += 1; pushCancel(id); }
+    else if (act === 'tUndo') { st.n = Math.max(0, st.n - 1); pushCancel(id); }
+    else if (act === 'tReset') { st.n = 0; st.endAt = 0; pushCancel(id); }
     else if (act === 'tEdit') sheet.editing = id;
     else if (act === 'tSave') {
       const sec = Number($('tm-m-' + id).value) * 60 + Number($('tm-s-' + id).value);
@@ -772,6 +779,149 @@
     const again = $('panel').querySelector(`[data-id="${CSS.escape(id)}"]`);
     if (again) again.focus();
   }
+
+  // ---------- 알림 (앱을 닫아도: 휴식 타이머 끝 · 쉬는 날) ----------
+  // 알림 서버(push/, Cloudflare Workers)에 보낼 시각과 내용을 맡기면 그때 웹 푸시로 보낸다.
+  // 아이폰은 홈 화면에 추가한 앱(iOS 16.4 이상), 안드로이드는 Chrome·삼성 인터넷 등에서 켤 수 있다. Claude 링크에서는 쓸 수 없다.
+  // 기기마다 따로 켠다: 이 기기의 id·켜짐 여부는 PKEY에만 둔다 (기록 데이터와 따로).
+  const PUSH_API = 'https://routine-push.peanutlover.workers.dev/api';
+  const VAPID = 'BBb9z0ezYxfSrktik_pHH6Z1D4C7ZBO5BxTkWa-ZTxYXjOgDLSXvhE73lA68Iqq5bU2cTqflqNHAHS2pl28th5E';
+  const PKEY = 'routine5.push';
+  let push = loadPush();     // { id, on, ep: 구독 주소, rest: 마지막으로 맡긴 쉬는 날 알림 }
+  let pushBusy = false;
+  function loadPush() {
+    try { const p = JSON.parse(localStorage.getItem(PKEY)); if (p && typeof p === 'object') return p; } catch (e) { /* 저장소 없음 */ }
+    return { on: false };
+  }
+  function savePush() { try { localStorage.setItem(PKEY, JSON.stringify(push)); } catch (e) { /* 저장소 없음 */ } }
+  const pushCan = () => !!(window.ROUTINE_STANDALONE && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window);
+  const pushOn = () => !!(push.on && push.id && pushCan() && Notification.permission === 'granted');
+  const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const b64u = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  function keyBytes(s) {
+    const t = s.replace(/-/g, '+').replace(/_/g, '/');
+    return Uint8Array.from(atob(t + '='.repeat((4 - (t.length % 4)) % 4)), (c) => c.charCodeAt(0));
+  }
+  // text/plain으로 보내 미리 묻는 요청(CORS preflight) 없이 바로 간다. keepalive: 앱을 닫는 순간에 보낸 것도 가게.
+  async function pushApi(body) {
+    const res = await fetch(PUSH_API, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(Object.assign({ id: push.id }, body)), keepalive: true });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(out.error || 'push ' + res.status), { code: out.error });
+    return out;
+  }
+  // 이 기기 구독을 만들거나(다른 서버 키로 만든 구독이면 새로) 그대로 쓰고 서버에 알린다.
+  async function pushSubscribe() {
+    const reg = await navigator.serviceWorker.ready;
+    const key = keyBytes(VAPID);
+    let sub = await reg.pushManager.getSubscription();
+    const k = sub && sub.options && sub.options.applicationServerKey;
+    if (sub && k && b64u(new Uint8Array(k)) !== VAPID) { await sub.unsubscribe(); sub = null; }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    if (!push.id) { const b = new Uint8Array(18); crypto.getRandomValues(b); push.id = b64u(b); }
+    await pushApi({ sub: sub.toJSON() });
+    push.ep = sub.endpoint;
+    savePush();
+  }
+  async function pushEnable() {
+    if (!pushCan() || pushBusy) return;
+    pushBusy = true;
+    renderPushCard();
+    try {
+      const perm = await Notification.requestPermission();   // 누른 그 자리에서 물어야 한다 (아이폰)
+      if (perm !== 'granted') { toast(perm === 'denied' ? '알림이 막혀 있어요. 휴대폰 설정에서 허용해 주세요' : '알림을 허용해야 켤 수 있어요'); return; }
+      await pushSubscribe();
+      push.on = true; push.rest = null; savePush();
+      pushRest();
+      toast('알림을 켰어요. 테스트 알림으로 확인해 보세요');
+    } catch (e) {
+      toast(e && e.code === 'endpoint' ? '이 브라우저의 알림은 지원하지 않아요' : '알림을 켜지 못했어요. 인터넷 연결을 확인해 주세요');
+    } finally { pushBusy = false; renderPushCard(); }
+  }
+  async function pushDisable() {
+    if (pushBusy) return;
+    pushBusy = true;
+    renderPushCard();
+    try { if (push.id) await pushApi({ off: true }); } catch (e) { /* 서버에 못 알려도 구독을 끊으면 오지 않는다 */ }
+    try { const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription(); if (sub) await sub.unsubscribe(); } catch (e) { /* 이미 없음 */ }
+    push.on = false; push.rest = null; push.ep = null; savePush();
+    pushBusy = false;
+    renderPushCard();
+    toast('이 기기 알림을 껐어요');
+  }
+  function pushTest() {
+    pushApi({ put: [{ tag: 'test', in: 5000, title: '웨이트 루틴', body: '알림이 이렇게 와요. 휴식 타이머가 끝나면 이렇게 알려줘요.', ttl: 120, urgent: true }] })
+      .then(() => toast('5초 뒤에 알림이 와요. 화면을 끄거나 다른 앱으로 가 보세요'))
+      .catch(() => toast('알림 서버에 연결하지 못했어요'));
+  }
+  // 켜 둔 기기는 열 때마다 구독이 그대로인지 보고, 없어졌거나 바뀌었으면 다시 알린다.
+  async function pushRefresh(force) {
+    if (!pushOn()) return;
+    try {
+      const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+      if (force || !sub || sub.endpoint !== push.ep) { await pushSubscribe(); push.rest = null; savePush(); pushRest(); }
+    } catch (e) { /* 다음에 다시 */ }
+  }
+  // 휴식이 끝나는 시각(+1.5초)에 알림. 앱을 보고 있는 채로 끝나면 앱이 소리로 알리고 그 알림은 취소한다.
+  function pushTimer(r, st) {
+    if (!pushOn()) return;
+    const n = st.n + 1;
+    pushApi({ put: [{ tag: 't:' + r.id, in: Math.max(0, st.endAt - Date.now()) + 1500, title: `${r.name} 휴식 끝`,
+      body: `${n >= restNeed(r) ? '마지막 세트 하고 완료예요' : `${n + 1}세트 시작`} · ${L.fmtW(r)} × ${r.reps}회`, ttl: 60, urgent: true }] })
+      .catch(() => toast('알림 서버에 연결하지 못했어요 · 앱을 켜 두면 소리로 알려줘요'));
+  }
+  function pushCancel(id) { if (pushOn()) pushApi({ del: ['t:' + id] }).catch(() => {}); }
+  // 쉬는 날 알림: 오늘부터 운동하지 않으면 쉰 지 3·4일째(10일 규칙은 8·9일째) 되는 날 아침 9시에 보낼 알림.
+  // 운동할 날(sim.gaps) 할 종목마다 쉰 날 수로 계산하고, 내용이 바뀔 때만 서버에 통째로 다시 맡긴다.
+  function restPushItems(sim) {
+    const g = sim.gaps, out = [], now = Date.now();
+    if (!g || !g.items.length) return out;
+    const names = (n) => (n.length <= 2 ? n.join(' · ') : `${n[0]} 외 ${n.length - 1}종목`);
+    for (let k = 0; k <= L.GAP2; k++) {
+      const lines = new Map();   // 쉰 날 수마다 종목 이름
+      for (const x of g.items) {
+        const R = x.rest + k;
+        if (![L.GAP1 - 2, L.GAP1 - 1, L.GAP2 - 2, L.GAP2 - 1].includes(R)) continue;
+        if (!lines.has(R)) lines.set(R, []);
+        lines.get(R).push(x.main ? '데드리프트·스쿼트' : x.name);
+      }
+      if (!lines.size) continue;
+      const what = (R) => `${R === L.GAP1 - 2 || R === L.GAP2 - 2 ? '이틀' : '오늘 하루'} 더 쉬면 ${R < L.GAP1 ? '세션이 처음부터 다시 시작되고 한 단계' : '한 단계 더'} 낮아져요`;
+      const s = L.toStr(g.day + k);
+      const at = new Date(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10), 9, 0, 0).getTime();
+      if (at < now + 60000) continue;
+      const one = lines.size === 1 && [...lines][0];
+      out.push(one
+        ? { tag: 'r:' + s, at, ttl: 6 * 3600, title: `쉰 지 ${one[0]}일째예요`, body: `${what(one[0])} · ${names(one[1])}` }
+        : { tag: 'r:' + s, at, ttl: 6 * 3600, title: '쉬는 날 알림', body: [...lines].map(([R, n]) => `${names(n)} 쉰 지 ${R}일째 · ${what(R)}`).join('\n') });
+    }
+    return out;
+  }
+  let restWait = 0;
+  function pushRest() {
+    if (!pushOn()) return;
+    clearTimeout(restWait);
+    restWait = setTimeout(() => {
+      const items = data.started ? restPushItems(logSim()) : [];
+      const key = JSON.stringify(items);
+      if (key === push.rest) return;
+      pushApi({ group: 'rest', put: items })
+        .then((out) => { push.rest = key; savePush(); if (out && out.sub === false) pushRefresh(true); })
+        .catch(() => { /* 다음에 열 때 다시 */ });
+    }, 1000);
+  }
+  function pushCard() {
+    const b = (act, label, main) => `<button class="btn${main ? '' : ' ghost'}" type="button" data-act="${act}" ${pushBusy ? 'disabled' : ''}>${label}</button>`;
+    let note = '', btns = '';
+    if (!window.ROUTINE_STANDALONE) note = 'Claude 링크에서는 알림을 보낼 수 없어요. GitHub 주소로 연 앱에서 켜 주세요.';
+    else if (!pushCan()) note = isIOS() ? '아이폰은 홈 화면에 추가한 앱에서만 켤 수 있어요. Safari 공유 버튼 → 홈 화면에 추가 → 그 아이콘으로 열어 주세요 (iOS 16.4 이상).' : '이 브라우저는 알림을 지원하지 않아요. Chrome이나 삼성 인터넷으로 열어 주세요.';
+    else if (Notification.permission === 'denied') { note = '알림이 막혀 있어요. 휴대폰 설정에서 이 앱(브라우저)의 알림을 허용한 뒤 다시 켜 주세요.'; btns = b('pushOn', '알림 켜기', true); }
+    else if (pushOn()) { note = '이 기기에서 켜져 있어요.'; btns = b('pushTest', '테스트 알림 (5초 뒤)') + b('pushOff', '알림 끄기'); }
+    else btns = b('pushOn', '알림 켜기', true);
+    return `<div class="card" id="pushCard"><h2>알림</h2>
+      <p class="small">앱을 닫아도(다른 앱을 쓰거나 화면이 꺼져도) 휴식 타이머가 끝나면 알림이 와요. 운동을 쉰 지 3·4일째 되는 날에는 아침 9시에 알려줘요. 기기마다 따로 켜요.</p>
+      ${note ? `<p class="small">${note}</p>` : ''}${btns ? `<div class="btnrow">${btns}</div>` : ''}</div>`;
+  }
+  function renderPushCard() { const el = $('pushCard'); if (el) el.outerHTML = pushCard(); }
 
   // ---------- 기록 시트 ----------
   function openSheet(mode, day) {
@@ -1139,6 +1289,7 @@
       <p class="small">이미 하던 루틴이 있으면 시작 지점을 그 세션으로 옮기세요. 그 날부터 오늘까지 한 운동은 이번 주 화면에서 지난 날을 눌러 날짜순으로 기록하면 돼요. 아래 무게는 시작 지점 세션의 무게예요.</p>
       <div class="btnrow"><button class="btn ghost" type="button" data-act="startSheet">시작 지점 바꾸기 · 이어서 시작</button></div>
       <p class="small">쉬는 요일은 따로 없어요. 세션의 6번째 운동을 마친 다음 날 하루 쉬고, 기록하지 않은 날은 쉰 날로 봐요. 설정을 바꿔도 이미 한 기록의 무게·횟수는 그대로 두고, 그다음부터 바뀐 설정으로 계산해요. 데드리프트 시작 무게를 바꾸면 지금 무게도 같은 비율로 바뀌어요.</p></div>`;
+    h += pushCard();
 
     const cnt = L.plateCounts(cfg.plates);
     h += `<div class="card"><h2>가지고 있는 경량원판</h2>
@@ -1498,6 +1649,9 @@
     else if (act === 'addSave') addSave();
     else if (act === 'pickDel') { const a = data.cfg.acc.find((x) => x.id === b.dataset.id); data.cfg.acc = data.cfg.acc.filter((x) => x.id !== b.dataset.id); save(a ? `${josa(a.name, '을', '를')} 뺐어요` : ''); }
     else if (act === 'pmOk') confirmMode();
+    else if (act === 'pushOn') pushEnable();
+    else if (act === 'pushOff') pushDisable();
+    else if (act === 'pushTest') pushTest();
     else if (act === 'pmCancel') { pendingMode = null; renderSettings(); }
     else if (act === 'addBand') {
       const names = data.cfg.gear.bands;
@@ -1557,6 +1711,7 @@
     const now = L.localToday();
     if (now !== today) { today = now; weekMon = L.mondayOf(L.toNum(today)); timer = loadTimer(); render(); }
     if (Object.values(timer.items).some((t) => t.endAt)) { tick(); if (running()) startTick(); }
+    pushRefresh();
   });
 
   render();
@@ -1568,5 +1723,6 @@
   if (window.ROUTINE_STANDALONE && 'serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    pushRefresh();
   }
 })();
