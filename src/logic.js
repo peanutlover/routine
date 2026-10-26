@@ -74,7 +74,7 @@ const RoutineLogic = (() => {
       from: { no: 1, k: 0, stage: 1, acc: {} },
       plates: [1.25],
       gear: defaultGear(),
-      main: { dl: 40, ratio: 1.2, pct: 5, inc: { dl: 'pct', sq: 'pct' }, ichg: [], prog: 'r', reps: 5, ladder: [3, 4, 5], sets: 3, rest: '5~8분' },
+      main: { dl: 40, sq: null, ratio: 1.2, pct: 5, inc: { dl: 'pct', sq: 'pct' }, ichg: [], prog: 'r', reps: 5, ladder: [3, 4, 5], sets: 3, rest: '5~8분' },
       acc: CATALOG.map(accDefaults),
     };
   }
@@ -166,10 +166,13 @@ const RoutineLogic = (() => {
   const liftW = (cfg, an, level) => (an.i !== 'pct'
     ? Math.max(1, an.w + an.i * (level - an.l))
     : an.w * Math.pow(1 + cfg.main.pct / 100, level - an.l));
-  // 시작 지점(level 0)의 기준점: 데드리프트 시작 무게, 스쿼트 = 데드리프트 ÷ ratio
+  // 스쿼트 시작 무게: 따로 넣었으면(main.sq) 그 무게, 비워 두면 추천 무게(데드리프트 ÷ ratio)
+  const sqRec = (cfg) => cfg.main.dl / cfg.main.ratio;
+  const sqStart = (cfg) => (cfg.main.sq > 0 ? cfg.main.sq : sqRec(cfg));
+  // 시작 지점(level 0)의 기준점: 데드리프트·스쿼트 시작 무게
   const mainAnchors = (cfg, no) => ({
     dl: { l: 0, w: cfg.main.dl, i: mainInc(cfg, 'dl', no) },
-    sq: { l: 0, w: cfg.main.dl / cfg.main.ratio, i: mainInc(cfg, 'sq', no) },
+    sq: { l: 0, w: sqStart(cfg), i: mainInc(cfg, 'sq', no) },
   });
   // 세션 no로 넘어갈 때 그 세션부터 증량 방식이 바뀌면, 방금 한 세션(st)의 무게를 기준점으로 잡는다.
   function rebaseMain(cfg, st, no) {
@@ -865,7 +868,7 @@ const RoutineLogic = (() => {
 
   return {
     SLOTS, MAIN_STAGES, ACC_TOP, GAP1, GAP2, PLATE_OPTIONS, MODES, MODE_KEYS, CATALOG, EXTRA, toNum, toStr, weekday, mondayOf, localToday,
-    defaultConfig, defaultGear, accDefaults, migrate, mainInc, LIFTS, MAIN_KG, startPoint, accAt, accTop, mainTop, restStage, segAt, initState, prescribe, evaluate, advance,
+    defaultConfig, defaultGear, accDefaults, migrate, mainInc, LIFTS, MAIN_KG, sqRec, sqStart, startPoint, accAt, accTop, mainTop, restStage, segAt, initState, prescribe, evaluate, advance,
     replay, projectTo, simulate, timeline, snapLogs, snapOf, canLog, slotType, slotNo, slotPos, REST_SKIP,
     stepW, gearList, ladderOf, ladderReps, dayRows, roundW, fmtW, plateCounts, plateMath, plateText, stackMath, stackText, chainText, loadInfo,
   };

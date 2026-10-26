@@ -557,7 +557,7 @@ const RoutineLogic = (() => {
       from: { no: 1, k: 0, stage: 1, acc: {} },
       plates: [1.25],
       gear: defaultGear(),
-      main: { dl: 40, ratio: 1.2, pct: 5, inc: { dl: 'pct', sq: 'pct' }, ichg: [], prog: 'r', reps: 5, ladder: [3, 4, 5], sets: 3, rest: '5~8분' },
+      main: { dl: 40, sq: null, ratio: 1.2, pct: 5, inc: { dl: 'pct', sq: 'pct' }, ichg: [], prog: 'r', reps: 5, ladder: [3, 4, 5], sets: 3, rest: '5~8분' },
       acc: CATALOG.map(accDefaults),
     };
   }
@@ -649,10 +649,13 @@ const RoutineLogic = (() => {
   const liftW = (cfg, an, level) => (an.i !== 'pct'
     ? Math.max(1, an.w + an.i * (level - an.l))
     : an.w * Math.pow(1 + cfg.main.pct / 100, level - an.l));
-  // 시작 지점(level 0)의 기준점: 데드리프트 시작 무게, 스쿼트 = 데드리프트 ÷ ratio
+  // 스쿼트 시작 무게: 따로 넣었으면(main.sq) 그 무게, 비워 두면 추천 무게(데드리프트 ÷ ratio)
+  const sqRec = (cfg) => cfg.main.dl / cfg.main.ratio;
+  const sqStart = (cfg) => (cfg.main.sq > 0 ? cfg.main.sq : sqRec(cfg));
+  // 시작 지점(level 0)의 기준점: 데드리프트·스쿼트 시작 무게
   const mainAnchors = (cfg, no) => ({
     dl: { l: 0, w: cfg.main.dl, i: mainInc(cfg, 'dl', no) },
-    sq: { l: 0, w: cfg.main.dl / cfg.main.ratio, i: mainInc(cfg, 'sq', no) },
+    sq: { l: 0, w: sqStart(cfg), i: mainInc(cfg, 'sq', no) },
   });
   // 세션 no로 넘어갈 때 그 세션부터 증량 방식이 바뀌면, 방금 한 세션(st)의 무게를 기준점으로 잡는다.
   function rebaseMain(cfg, st, no) {
@@ -1348,7 +1351,7 @@ const RoutineLogic = (() => {
 
   return {
     SLOTS, MAIN_STAGES, ACC_TOP, GAP1, GAP2, PLATE_OPTIONS, MODES, MODE_KEYS, CATALOG, EXTRA, toNum, toStr, weekday, mondayOf, localToday,
-    defaultConfig, defaultGear, accDefaults, migrate, mainInc, LIFTS, MAIN_KG, startPoint, accAt, accTop, mainTop, restStage, segAt, initState, prescribe, evaluate, advance,
+    defaultConfig, defaultGear, accDefaults, migrate, mainInc, LIFTS, MAIN_KG, sqRec, sqStart, startPoint, accAt, accTop, mainTop, restStage, segAt, initState, prescribe, evaluate, advance,
     replay, projectTo, simulate, timeline, snapLogs, snapOf, canLog, slotType, slotNo, slotPos, REST_SKIP,
     stepW, gearList, ladderOf, ladderReps, dayRows, roundW, fmtW, plateCounts, plateMath, plateText, stackMath, stackText, chainText, loadInfo,
   };
@@ -1470,6 +1473,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
     const one = (v) => (v === 'kg' ? kg : Number(v) > 0 && Number(v) <= 50 ? Number(v) : 'pct');
     m.inc = { dl: one(inc.dl), sq: one(inc.sq) };
     delete m.kg;
+    m.sq = Number(m.sq) > 0 ? Number(m.sq) : null;
     m.ichg = Array.isArray(m.ichg) ? m.ichg.filter((x) => x && Number(x.no) >= 1 && L.LIFTS.includes(x.id))
       .map((x) => ({ no: Math.floor(Number(x.no)), id: x.id, inc: one(x.inc) })).sort((p, q) => p.no - q.no) : [];
     return m;
@@ -2411,7 +2415,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
     else if (day == null) day = L.toNum(cfg.startDate) < T ? L.toNum(cfg.startDate) : T - 1;
     const acc = {};
     for (const a of cfg.acc) { const s = st.acc[a.id]; acc[a.id] = { w: s.w, mode: s.mode, step: s.step, n: s.n }; }
-    sheet = { kind: 'start', day, no: sp.no, k: sp.k, stage: Math.min(sp.stage, L.mainTop(cfg)), dl: cfg.main.dl, acc, note: '', err: '', opener: document.activeElement };
+    sheet = { kind: 'start', day, no: sp.no, k: sp.k, stage: Math.min(sp.stage, L.mainTop(cfg)), dl: cfg.main.dl, sq: cfg.main.sq, acc, note: '', err: '', opener: document.activeElement };
     $('sheet').hidden = false;
     renderStart();
     const first = $('panel').querySelector('input:not([disabled]), select');
@@ -2431,6 +2435,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
     }
     sheet.stage = p.presc.main.stage;
     sheet.dl = r2(p.presc.main.dl);
+    sheet.sq = cfg.main.sq > 0 ? r2(p.presc.main.sq) : null;   // 따로 넣은 스쿼트 무게만 채운다 (아니면 추천 무게를 따른다)
     for (const a of cfg.acc) {
       const s = p.state.acc[a.id];
       sheet.acc[a.id] = { w: s.w == null ? null : r2(s.w), mode: s.mode, step: s.step, n: s.n };
@@ -2465,7 +2470,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
       <label class="field"><span>하체 단계</span><select id="st-stage" data-sk="stage">${Array.from({ length: L.mainTop(cfg) }, (_, i) => i + 1).map((s) => `<option value="${s}" ${s === d.stage ? 'selected' : ''}>${stageName(s)}</option>`).join('')}</select></label></div>
       ${d.note ? `<p class="small note">${esc(d.note)}</p>` : ''}
       <div class="row2"><label class="field"><span>데드리프트 (kg)</span><input type="number" inputmode="decimal" step="0.1" min="1" id="st-dl" data-sk="dl" value="${d.dl}"></label>
-      <div class="field"><span>스쿼트</span><div class="derived" id="st-sq"></div></div></div>
+      <label class="field"><span>스쿼트 (kg)</span><input type="number" inputmode="decimal" step="0.1" min="1" id="st-sq" data-sk="sq" value="${d.sq > 0 ? d.sq : ''}"></label></div>
+      <p class="small" id="st-sqhint"></p>
       <div class="stacc"><div class="sthead">상체·팔 <span>· 이 세션의 무게와 횟수</span></div>`;
     for (const a of cfg.acc) {
       const o = d.acc[a.id];
@@ -2490,10 +2496,17 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
     if (focusId && $(focusId)) $(focusId).focus();
     startSquat();
   }
-  function startSquat() {
-    const el = $('st-sq');
-    if (el) el.innerHTML = sheet.dl > 0 ? `<b>${L.roundW(sheet.dl / data.cfg.main.ratio)}kg</b> (÷ ${data.cfg.main.ratio})` : '—';
+  // 스쿼트 추천 무게(데드리프트 ÷ ratio)는 입력칸의 흐린 글씨와 안내로만 보여준다.
+  function sqHint(input, hint, dl, sq) {
+    const ratio = data.cfg.main.ratio;
+    const rec = dl > 0 ? L.roundW(dl / ratio) : null;
+    if (input) input.placeholder = rec ? String(rec) : '';
+    if (!hint) return;
+    hint.innerHTML = !rec ? '스쿼트 무게를 넣거나, 데드리프트 무게를 넣으면 추천 무게를 알려줘요.'
+      : sq > 0 ? `추천 <b>${rec}kg</b> (데드리프트 ÷ ${ratio}). 비우면 추천 무게로 해요.`
+      : `비워 두면 추천 무게 <b>${rec}kg</b> (데드리프트 ÷ ${ratio})로 해요. 따로 정하려면 넣어 주세요.`;
   }
+  function startSquat() { sqHint($('st-sq'), $('st-sqhint'), sheet.dl, sheet.sq); }
   // 이어서 시작 시트의 입력: 숫자는 입력하는 대로 반영하고, 구조가 바뀌는 값(세션·단계·종목)은 다시 그린다.
   function startInput(el, done) {
     const d = sheet;
@@ -2502,6 +2515,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
     const a = el.dataset.id ? data.cfg.acc.find((x) => x.id === el.dataset.id) : null;
     d.err = '';
     if (f === 'dl') { d.dl = Number(el.value); startSquat(); return; }
+    if (f === 'sq') { d.sq = el.value === '' ? null : Number(el.value); startSquat(); return; }
     if (f === 'w' && o) {
       o.w = Number(el.value);
       if (done && a && a.prog === 'r') { const sel = $('st-step-' + a.id); if (sel) sel.innerHTML = stepOptions(a, o); }
@@ -2529,9 +2543,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
       if (d.k % 2 !== L.startPoint(cfg).k % 2) return fail(`이미 기록한 운동과 데드리프트·스쿼트 순서가 어긋나요. 이 날 운동을 ${TYPE_NAME[L.slotType(L.startPoint(cfg).k)]} 날(${L.startPoint(cfg).k % 2 ? '2·4·6' : '1·3·5'}번째)로 골라 주세요.`);
     }
     if (!(d.dl > 0)) return fail('데드리프트 무게를 넣어 주세요.');
+    if (d.sq != null && !(d.sq > 0)) return fail('스쿼트 무게를 확인해 주세요. 비우면 추천 무게로 해요.');
     for (const a of cfg.acc) { const w = d.acc[a.id].w; if (w != null && d.acc[a.id].mode !== 'band' && !(w > 0)) return fail(`${a.name} 무게를 확인해 주세요.`); }
     cfg.startDate = L.toStr(d.day);
     cfg.main.dl = r2(d.dl);
+    cfg.main.sq = d.sq > 0 ? r2(d.sq) : null;
     const acc = {};
     for (const a of cfg.acc) {
       const o = d.acc[a.id];
@@ -2672,7 +2688,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
       <p class="startsum"><b>${longDate(L.toNum(cfg.startDate))}</b> · 세션 ${sp.no}의 ${sp.k + 1}번째 운동(${TYPE_NAME[L.slotType(sp.k)]}) · 하체 ${sp.stage}단계</p>
       <p class="small">이미 하던 루틴이 있으면 시작 지점을 그 세션으로 옮기세요. 그 날부터 오늘까지 한 운동은 이번 주 화면에서 지난 날을 눌러 날짜순으로 기록하면 돼요. 아래 무게는 시작 지점 세션의 무게예요.</p>
       <div class="btnrow"><button class="btn ghost" type="button" data-act="startSheet">시작 지점 바꾸기 · 이어서 시작</button></div>
-      <p class="small">쉬는 요일은 따로 없어요. 세션의 6번째 운동을 마친 다음 날 하루 쉬고, 기록하지 않은 날은 쉰 날로 봐요. 설정을 바꿔도 이미 한 기록의 무게·횟수는 그대로 두고, 그다음부터 바뀐 설정으로 계산해요. 데드리프트 시작 무게를 바꾸면 지금 무게도 같은 비율로 바뀌어요.</p></div>`;
+      <p class="small">쉬는 요일은 따로 없어요. 세션의 6번째 운동을 마친 다음 날 하루 쉬고, 기록하지 않은 날은 쉰 날로 봐요. 설정을 바꿔도 이미 한 기록의 무게·횟수는 그대로 두고, 그다음부터 바뀐 설정으로 계산해요. 데드리프트·스쿼트 시작 무게를 바꾸면 지금 무게도 따라 바뀌어요.</p></div>`;
     h += pushCard();
 
     const cnt = L.plateCounts(cfg.plates);
@@ -2702,7 +2718,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
     const incNote = sim ? `증량 방식을 바꾸면 진행 중인 세션은 그대로 하고 세션 ${mainChangeNo(sim)}부터 새 방식으로 올라가요.` : '';
     h += `<div class="card"><h2>하체 메인 · 데드리프트와 스쿼트</h2>
       <div class="row2"><label class="field"><span>데드리프트 ${wl} (kg)</span><input type="number" inputmode="decimal" step="0.1" min="1" id="set-dl" data-k="main.dl" value="${mm.dl}"></label>
-      <div class="field"><span>스쿼트 ${wl}</span><div class="derived" id="sqDerived"></div></div></div>
+      <label class="field"><span>스쿼트 ${wl} (kg)</span><input type="number" inputmode="decimal" step="0.1" min="1" id="set-sq" data-k="main.sq" value="${mm.sq > 0 ? mm.sq : ''}"></label></div>
+      <p class="small" id="sqDerived"></p>
       <div class="row2"><label class="field"><span>진행 방식</span><select id="set-mprog" data-k="main.prog"><option value="r" ${mm.prog !== 'w' ? 'selected' : ''}>횟수 고정</option><option value="w" ${mm.prog === 'w' ? 'selected' : ''}>무게 고정</option></select></label>
       ${mm.prog === 'w' ? `<label class="field"><span>횟수 단계 (쉼표로)</span><input type="text" inputmode="numeric" id="set-mladder" data-k="main.ladder" value="${esc(L.ladderOf(mm).join(', '))}"></label>`
         : `<label class="field"><span>횟수</span><input type="number" inputmode="numeric" min="1" id="set-mreps" data-k="main.reps" value="${mm.reps}"></label>`}</div>
@@ -2740,7 +2757,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
       <li>하체는 데드리프트·스쿼트 중 더 오래 쉰 쪽으로 세고, 하체 세션을 처음부터 다시 하면 그 세션의 상체·팔도 처음부터 해요(무게는 종목마다 쉰 날 수대로). 상체·팔이 쉬는 하체 마지막 단계 세션은 쉬는 날로 세지 않고, 고무밴드는 낮추지 않아요. 쉰 지 ${L.GAP1 - 2}·${L.GAP1 - 1}일째 되는 날엔 이번 주 화면 위에 알려줘요.</li>
       <li>휴식일에도 운동했다면 기록할 수 있고, 기록하면 운동한 날로 계산해요.</li>
       <li>이미 하던 루틴이면 시작 지점을 그 세션·순서·무게로 옮기고, 그 뒤 지난 날들을 날짜순으로 기록해 이어가요.</li>
-      <li>데드리프트 = 스쿼트 × 1.2. 둘은 한 묶음으로 같이 오르내려요. 하체를 하나라도 실패하면 다음 세션은 한 단계 낮춰 다시 해요.</li>
+      <li>스쿼트 시작 무게는 따로 넣을 수 있어요(비워 두면 추천 무게 = 데드리프트 ÷ 1.2). 둘은 한 묶음으로 같은 단계를 같이 오르내려요. 하체를 하나라도 실패하면 다음 세션은 한 단계 낮춰 다시 해요.</li>
       <li>데드리프트·스쿼트는 종목마다 5%씩, 5kg씩 또는 6kg씩 올릴 수 있어요. 세션 중에 바꾸면 그 세션은 그대로 하고, 다음 세션부터 앞 세션 무게에서 새 방식으로 오르내려요. 바벨·머신 보조 종목도 종목마다 %·kg을 골라요(진행 중인 세션 무게는 그대로).</li>
       <li>무게 고정 종목은 세션마다 다음 횟수로, 횟수 고정 종목은 세션마다 한 칸 무거운 무게로 가요. 실패하면 한 단계 낮춰 다시 하고, 사다리 끝을 성공하면 다음 세션에 증량해요. 하체가 마지막 단계인 세션(횟수 고정은 4단계)은 상체·팔이 쉬어요.</li>
       <li>바벨·머신·원판 여러 장은 %·kg으로 올리고 원판·무게추 조합을 알려줘요. 덤벨·일체형 바벨·원판 한 장은 가진 무게 중 다음 무게로 올라가요. 고무밴드는 증량 없이 기록만 해요.</li>
@@ -2762,8 +2779,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
     renderSettingsStorage();
   }
   function renderDerived() {
-    const el = $('sqDerived');
-    if (el) el.innerHTML = `<b>${L.roundW(data.cfg.main.dl / data.cfg.main.ratio)}kg</b> (데드리프트 ÷ ${data.cfg.main.ratio})`;
+    sqHint($('set-sq'), $('sqDerived'), data.cfg.main.dl, data.cfg.main.sq);
   }
   function renderSettingsStorage() {
     const el = $('storageNote');
@@ -2897,6 +2913,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
     } else if (k.startsWith('main.')) {
       const f = k.slice(5);
       if (f === 'rest') cfg.main.rest = el.value.trim();
+      else if (f === 'sq') {
+        const v = num(el.value);
+        if (el.value.trim() !== '' && !(v > 0)) { el.value = cfg.main.sq || ''; toast('0보다 큰 숫자를 넣어 주세요'); return; }
+        cfg.main.sq = el.value.trim() === '' ? null : v;
+      }
       else if (f === 'prog') { cfg.main.prog = el.value === 'w' ? 'w' : 'r'; save(); renderSettings(); return; }
       else if (f.startsWith('inc.')) {
         const id = f.slice(4), v = Number(el.value) > 0 ? Number(el.value) : 'pct';

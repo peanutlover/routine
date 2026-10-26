@@ -729,3 +729,18 @@ test('하체 증량 방식: 6kg씩, 예전 판의 kg는 5kg로 읽는다', () =>
   c.main.inc.sq = 'kg';
   assert.deepEqual(mainBy(c, [], L.toNum(TODAY) + 40).slice(0, 3).map((x) => x[1]), [85, 90, 95]);
 });
+
+test('스쿼트 시작 무게를 따로 넣으면 그 무게부터, 비우면 데드리프트 ÷ 1.2', () => {
+  const c = cfg();
+  c.main.dl = 102; c.acc = [];
+  assert.deepEqual(mainBy(c, [], L.toNum(TODAY) + 20).slice(0, 2), [[102, 85], [107.1, 89.3]]);
+  c.main.sq = 80;
+  assert.deepEqual(mainBy(c, [], L.toNum(TODAY) + 20).slice(0, 2), [[102, 80], [107.1, 84]]);
+  c.main.inc.sq = 5;
+  assert.deepEqual(mainBy(c, [], L.toNum(TODAY) + 20).slice(0, 3).map((x) => x[1]), [80, 85, 90]);
+  // 기록한 날 스쿼트 무게는 그대로 (나중에 시작 무게를 바꿔도)
+  const logs = logDaily(c, [], 4);
+  const before = loggedRows(c, logs, 'sq');
+  c.main.sq = 70;
+  assert.deepEqual(loggedRows(c, logs, 'sq'), before);
+});
