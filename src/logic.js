@@ -143,9 +143,11 @@ const RoutineLogic = (() => {
   };
   // 무게 고정일 때의 횟수 단계
   const ladderOf = (x) => (Array.isArray(x.ladder) && x.ladder.length ? x.ladder : [x.reps || 5]);
-  function ladderReps(x, step) {
+  // 첫 칸 아래(step < 0)는 첫 두 칸 간격만큼씩 내려간다 (4·6·8회면 −1단계 = 2회). ro = 기록할 때 횟수를 바꿔서 생긴 차이.
+  function ladderReps(x, step, ro = 0) {
     const lad = ladderOf(x);
-    return step >= 0 ? lad[Math.min(step, lad.length - 1)] : Math.max(1, lad[0] + step);
+    const gap = lad.length > 1 && lad[1] > lad[0] ? lad[1] - lad[0] : 1;
+    return Math.max(1, (step >= 0 ? lad[Math.min(step, lad.length - 1)] : lad[0] + step * gap) + ro);
   }
   // 보조 종목 사다리의 마지막 칸 번호: 횟수 고정은 무게 3단계, 무게 고정은 횟수 단계 수.
   const accTop = (a) => (a.prog === 'r' ? ACC_TOP : ladderOf(a).length - 1);
@@ -233,8 +235,9 @@ const RoutineLogic = (() => {
     const an = m.an || mainAnchors(cfg, 1);
     const base = { dl: liftW(cfg, an.dl, m.level), sq: liftW(cfg, an.sq, m.level), level: m.level, bundle: m.bundle, retry: m.fail };
     if (cfg.main.prog === 'w') {
-      const n = ladderOf(cfg.main).length;
-      return Object.assign(base, { stage: m.step + 1, top: n >= 3 && m.step === n - 1, reps: ladderReps(cfg.main, m.step) });
+      const n = ladderOf(cfg.main).length, ro = m.ro || {};
+      return Object.assign(base, { stage: m.step + 1, top: n >= 3 && m.step === n - 1, reps: ladderReps(cfg.main, m.step),
+        rq: { dl: ladderReps(cfg.main, m.step, ro.dl || 0), sq: ladderReps(cfg.main, m.step, ro.sq || 0) }, rstep: m.step });
     }
     return Object.assign(base, { stage: m.level - m.start + 1, top: m.level === m.start + MAIN_STAGES - 1, reps: cfg.main.reps });
   }
@@ -248,7 +251,7 @@ const RoutineLogic = (() => {
       const w = stepW(cfg, a, s.mode, s.w, s.step);
       return Object.assign(base, { w, n: s.n + s.step, reps: a.reps, maxed: isTop(cfg, s.mode, w) });
     }
-    return Object.assign(base, { w: s.w, n: s.n, reps: ladderReps(a, s.step), maxed: isTop(cfg, s.mode, s.w) });
+    return Object.assign(base, { w: s.w, n: s.n, reps: ladderReps(a, s.step, s.ro || 0), maxed: isTop(cfg, s.mode, s.w) });
   }
   function prescribe(cfg, st, no) {
     const main = mainPresc(cfg, st.main);
@@ -290,7 +293,7 @@ const RoutineLogic = (() => {
     const m = Object.assign({}, st, { fail: false, an: rebaseMain(cfg, st, no) });
     let bundleDone = false;
     if (cfg.main.prog === 'w') {
-      if (m.step >= ladderOf(cfg.main).length - 1) { m.level += 1; m.step = 0; m.bundle += 1; bundleDone = true; } else m.step += 1;
+      if (m.step >= ladderOf(cfg.main).length - 1) { m.level += 1; m.step = 0; m.bundle += 1; m.ro = null; bundleDone = true; } else m.step += 1;
     } else if (m.level === m.start + MAIN_STAGES - 1) { m.start += 1; m.level = m.start; m.bundle += 1; bundleDone = true; }
     else m.level += 1;
     return { m, bundleDone };
@@ -302,7 +305,7 @@ const RoutineLogic = (() => {
     if (!r) return Object.assign(lowerAcc(cfg, a, st), { fail: true });
     const s = Object.assign({}, st, { fail: false });
     if (s.step < accTop(a)) s.step += 1;
-    else { s.w = stepW(cfg, a, s.mode, s.w, 1); s.n += 1; s.step = 0; }
+    else { s.w = stepW(cfg, a, s.mode, s.w, 1); s.n += 1; s.step = 0; s.ro = 0; }
     return s;
   }
   function advance(cfg, st, out, no) {
@@ -342,9 +345,12 @@ const RoutineLogic = (() => {
   // 세션 6번째 운동 다음 날은 정식 휴식. 단, 그 세션을 하는 동안 REST_SKIP일 이상 쉬었다면 건너뛴다.
   // 휴식일에도 기록하면 운동한 날로 계산한다.
   // 기록 형식: {d, res:{종목id: true|false}, p:1}. p가 없는 예전 기록은 고르지 않은 종목을 성공으로 본다.
-  //   w:{종목id: 무게} = 그날 계획과 다른 무게로 했으면 실제로 든 무게. o:'S' = 그 세션을 스쿼트부터 했다 (세션 첫 운동 기록에).
+  //   w:{종목id: 무게} = 그날 계획과 다른 무게로 했으면 실제로 든 무게. r·e:{종목id: 횟수·세트} = 계획과 다르게 한 횟수·세트. o:'S' = 그 세션을 스쿼트부터 했다 (세션 첫 운동 기록에).
   // 무게를 바꿔서 했으면 그 무게를 기준으로 그 세션의 남은 운동과 다음 세션을 계산한다. 단, 계획보다 무겁게 해서 실패했으면
   //   계획 무게가 기준이다 (그 무게로 실패 처리). 계획보다 가볍게 했으면 성공·실패 모두 바꾼 무게가 기준.
+  //   횟수 단계가 있는 종목(무게 고정)에서 횟수를 바꾸면 성공·실패 모두 바꾼 횟수가 기준: 그 세션의 남은 운동은 그 횟수, 다음 세션은
+  //   거기서 원래 사다리 간격만큼 오르내린다 (4·6·8회의 6회 차례에 10회 성공 → 12회). 묶음을 마치고 무게를 올리면 사다리 처음부터.
+  //   세트, 횟수 단계가 없는 종목(횟수 고정·고무밴드)의 횟수는 그날 기록만 바꾼다.
   // 오래 쉬면 처음부터: 한 종목을 GAP1일 이상 쉬면(마지막으로 한 다음 날부터 다시 하는 날 전날까지 센 날 수) 성공·실패와 상관없이
   //   그 종목의 진행 중인 세션을 처음부터 다시 하고 한 단계 낮춘다. GAP2일 이상이면 한 단계 더 (한 번 쉬는 동안 두 단계까지).
   //   하체는 데드리프트·스쿼트 중 더 오래 쉰 쪽으로 세고, 세션(6회)을 데드리프트부터 다시 한다. 둘은 같이 낮아진다.
@@ -355,7 +361,8 @@ const RoutineLogic = (() => {
   function mainRow(cfg, mp, type) {
     return {
       id: type === 'D' ? 'dl' : 'sq', name: type === 'D' ? '데드리프트' : '스쿼트', part: '하체', main: true, mode: 'barbell',
-      w: type === 'D' ? mp.dl : mp.sq, n: 0, reps: mp.reps, sets: cfg.main.sets, rest: cfg.main.rest, retry: mp.retry,
+      w: type === 'D' ? mp.dl : mp.sq, n: 0, reps: mp.rq ? mp.rq[type === 'D' ? 'dl' : 'sq'] : mp.reps, sets: cfg.main.sets, rest: cfg.main.rest, retry: mp.retry,
+      prog: cfg.main.prog, rstep: mp.rstep, lad: cfg.main.prog === 'w' ? ladderOf(cfg.main) : null,
     };
   }
   function accRow(a, p) {
@@ -363,6 +370,7 @@ const RoutineLogic = (() => {
     return {
       id: a.id, name: p.name, part: a.part, mode: p.mode, w: p.w, n: p.n, inc: p.inc, incV: p.incV, prog: p.prog,
       reps: p.reps, sets: a.sets, rest: a.rest, retry: p.retry, maxed: p.maxed, band: p.band, bands: p.bands, stack: a.stack || [],
+      rstep: p.step, lad: a.prog === 'w' && !p.band ? ladderOf(a) : null,
     };
   }
 
@@ -375,7 +383,7 @@ const RoutineLogic = (() => {
   const r4 = (x) => (x == null ? null : Math.round(x * 1e4) / 1e4);
   function mainSnap(cfg, ms) {
     const m = ms.state, p = ms.presc;
-    return { l: m.level, s: m.start, t: m.step, b: m.bundle, f: m.fail ? 1 : 0, top: p.top ? 1 : 0, k: cfg.main.prog, W: r4(p.dl), Q: r4(p.sq), r: p.reps, e: cfg.main.sets };
+    return { l: m.level, s: m.start, t: m.step, b: m.bundle, f: m.fail ? 1 : 0, top: p.top ? 1 : 0, k: cfg.main.prog, W: r4(p.dl), Q: r4(p.sq), r: p.reps, e: cfg.main.sets, ...(p.rq && (p.rq.dl !== p.reps || p.rq.sq !== p.reps) ? { u: p.rq } : {}) };
   }
   function accSnap(a, st, p) {
     const o = { m: st.mode, w: r4(st.w), t: st.step, n: st.n, k: a.prog, W: r4(p.w), r: p.reps, e: a.sets, f: st.fail ? 1 : 0 };
@@ -445,7 +453,7 @@ const RoutineLogic = (() => {
       const cur = S[S.length - 1];
       if (!sn || cur.snap || cur.res.length) return;
       cur.snap = sn;
-      cur.state = Object.assign(mainFromSnap(cfg, sn), { an: cur.state.an });
+      cur.state = Object.assign(mainFromSnap(cfg, sn), { an: cur.state.an, ro: cur.state.ro });
       cur.presc = Object.assign(mainPresc(cfg, cur.state), { top: !!sn.top });
     };
     const mainSnapOf = (li) => (logs[li] && logs[li].s && logs[li].s.main) || null;
@@ -558,10 +566,31 @@ const RoutineLogic = (() => {
         const x = r.main ? sn.main : sn[r.id];
         if (!x || r.avail !== 'ok') continue;
         if (!r.main) { r.w = x.W; r.mode = x.m; if (x.i) { r.inc = x.i; r.incV = x.v; } } else if (x.W != null) r.w = r.id === 'dl' ? x.W : sqOf(x);
-        r.reps = x.r; r.sets = x.e;
+        r.reps = r.main && x.u ? x.u[r.id] : x.r; r.sets = x.e;
       }
     }
     // 그날 바꾼 무게(ov)로 한 종목: 보여줄 무게를 바꾸고(plan = 계획 무게), 기준 무게가 달라지면 그 종목의 상태를 그 무게로 맞춘다.
+    function overrideDay(info, lg) {
+      for (const r of info.rows) {
+        if (r.avail !== 'ok' || typeof r.result !== 'boolean') continue;
+        const R = lg.r && lg.r[r.id], E = lg.e && lg.e[r.id];
+        if (E > 0 && E !== r.sets) { r.planE = r.sets; r.sets = E; }
+        if (!(R > 0) || R === r.reps) continue;
+        const P = r.reps;
+        r.planR = P; r.reps = R;
+        if (!r.lad) continue;
+        if (r.main) {
+          const cur = S[S.length - 1], ro = Object.assign({}, cur.state.ro);
+          ro[r.id] = (ro[r.id] || 0) + R - P;
+          cur.state = Object.assign({}, cur.state, { ro });
+          cur.presc = Object.assign(mainPresc(cfg, cur.state), { top: cur.presc.top });
+        } else {
+          const X = A.find((y) => y.a.id === r.id), x = X.sess[X.i];
+          x.state = Object.assign({}, x.state, { ro: (x.state.ro || 0) + R - P }); x.presc = null;
+        }
+      }
+      if (lg.w) overrideW(info, lg.w);
+    }
     function overrideW(info, ov) {
       for (const r of info.rows) {
         const w = ov[r.id];
@@ -588,10 +617,10 @@ const RoutineLogic = (() => {
       }
     }
     let restDay = null, skipNote = null;
-    function apply(d, info, res, legacy, nextMain, ov) {
+    function apply(d, info, res, legacy, nextMain, lg) {
       const got = (id) => (legacy ? res[id] !== false : typeof res[id] === 'boolean' ? res[id] : null);
       for (const r of info.rows) r.result = r.avail === 'ok' ? got(r.id) : null;
-      if (ov) overrideW(info, ov);
+      if (lg && (lg.w || lg.r || lg.e)) overrideDay(info, lg);
       for (const r of info.rows) {
         if (r.main || r.result == null) continue;
         const X = A.find((x) => x.a.id === r.id);
@@ -646,7 +675,7 @@ const RoutineLogic = (() => {
       if (lg.b) for (const r of info.rows) if (r.band && Array.isArray(lg.b[r.id])) r.bands = lg.b[r.id].slice();
       if (sn) shown(info, sn);
       days.set(ld, Object.assign(info, { kind: 'log', li, restSkipped: ld === skipNote }));
-      apply(ld, info, lg.res || {}, !lg.p, mainSnapOf(li + 1), lg.w);
+      apply(ld, info, lg.res || {}, !lg.p, mainSnapOf(li + 1), lg);
       last = ld;
       d = ld + 1;
     });

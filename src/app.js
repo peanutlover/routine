@@ -79,6 +79,13 @@
           for (const [id, v] of Object.entries(l.w)) if (typeof v === 'number' && v > 0 && v <= 1000) w[id] = v;
           if (Object.keys(w).length) o.w = w;
         }
+        // 그날 계획과 다르게 한 횟수·세트
+        for (const k of ['r', 'e']) {
+          if (!l[k] || typeof l[k] !== 'object') continue;
+          const x = {};
+          for (const [id, v] of Object.entries(l[k])) if (Number.isInteger(v) && v >= 1 && v <= 100) x[id] = v;
+          if (Object.keys(x).length) o[k] = x;
+        }
         if (l.b && typeof l.b === 'object') {
           const b = {};
           for (const [id, v] of Object.entries(l.b)) if (Array.isArray(v)) b[id] = v.filter((s) => typeof s === 'string');
@@ -262,7 +269,8 @@
     if (row.retry) f += '<span class="flag retry">재도전</span>';
     if (row.rested) f += `<span class="flag rest">쉬어서 ${STEPS[row.rested] || row.rested} 단계 낮춤</span>`;
     if (row.lag) f += `<span class="flag lag">밀림 · 세션 ${row.accNo} 몫</span>`;
-    if (row.plan != null) f += `<span class="flag hold">계획 ${esc(L.fmtW(Object.assign({}, row, { w: row.plan })))}에서 바꿈</span>`;
+    const was = [row.plan != null ? L.fmtW(Object.assign({}, row, { w: row.plan })) : '', row.planR != null ? `${row.planR}회` : '', row.planE != null ? `${row.planE}세트` : ''].filter(Boolean);
+    if (was.length) f += `<span class="flag hold">계획 ${esc(was.join('·'))}에서 바꿈</span>`;
     return f;
   }
 
@@ -689,7 +697,7 @@
     const now = Date.now();
     const doneCount = rows.filter((r) => tState(r.id).n >= restNeed(r)).length;
     h += `<div class="sub">${longDate(L.toNum(today))} · ${TYPE_NAME[info.type]} 날 · 완료 ${doneCount}/${rows.length}종목</div></div>
-      <p class="small">세트를 마치면 그 종목의 <strong>휴식 시작</strong>을 눌러요. 종목 순서는 자유예요. 휴식이 세트 수보다 한 번 적게 끝나면(3세트면 2번) 그 종목은 완료예요.</p>`;
+      <p class="small">세트를 마치면 그 종목의 <strong>휴식 시작</strong>을 눌러요. 누를 때마다 세트 칸이 하나씩 채워지고, 마지막 휴식(3세트면 2번째)이 끝나면 남은 칸이 채워지며 그 종목은 완료예요. 종목 순서는 자유예요.</p>`;
     if (pushCan() && !pushOn()) h += '<p class="small note">앱을 닫아도 휴식이 끝날 때 알림을 받으려면 설정 → 알림을 켜 주세요.</p>';
     else if (!pushCan() && window.ROUTINE_STANDALONE && isIOS()) h += '<p class="small note">홈 화면에 추가한 앱으로 열면 앱을 닫아도 휴식이 끝날 때 알림을 받을 수 있어요.</p>';
     h += '<div class="tmrs">';
@@ -702,7 +710,8 @@
       const editing = sec == null || sheet.editing === r.id;
       const setNo = Math.min(r.sets, st.n + 1);
       let dots = '';
-      for (let i = 0; i < r.sets; i++) dots += `<i class="${i < st.n + (done ? 1 : 0) ? 'on' : ''}"></i>`;
+      // 휴식 시작을 누르면 방금 마친 세트 칸을 바로 채우고, 마지막 휴식이 끝나면(완료) 마지막 칸까지 채운다.
+      for (let i = 0; i < r.sets; i++) dots += `<i class="${i < st.n + (run || done ? 1 : 0) ? 'on' : ''}"></i>`;
       h += `<section class="tmr${run ? ' run' : ''}${done ? ' done' : ''}" aria-label="${esc(r.name)}">
         <div class="tmhead"><div><div class="nm">${esc(r.name)}</div><div class="rx"><b>${wHtml(r)}</b> · ${r.reps}회 × ${r.sets}세트</div></div>
           <div class="tmset"><span class="dots" aria-hidden="true">${dots}</span><span>${done ? '완료' : run ? `${st.n + 1}세트 끝 · 휴식 중` : `${setNo}세트째`}</span></div></div>`;
@@ -958,14 +967,15 @@
   function openSheet(mode, day) {
     const li = mode === 'new' ? data.logs.length : data.logs.findIndex((l) => L.toNum(l.d) === day);
     if (li < 0) return;
-    const res = {}, w = {};
+    const res = {}, w = {}, rr = {}, e = {};
     if (mode === 'edit') {
-      const e = model(weekMon + 6).sim.days.get(day);
-      for (const r of e.rows) if (r.avail === 'ok' && r.result != null) res[r.id] = r.result;
-      Object.assign(w, data.logs[li].w || {});
+      const ev = model(weekMon + 6).sim.days.get(day);
+      for (const r of ev.rows) if (r.avail === 'ok' && r.result != null) res[r.id] = r.result;
+      Object.assign(w, data.logs[li].w || {}); Object.assign(rr, data.logs[li].r || {}); Object.assign(e, data.logs[li].e || {});
     }
-    // w: 그날 계획과 다르게 한 무게, ew: 무게 입력칸을 연 종목
-    sheet = { kind: 'log', mode, day, li, res, w, ew: new Set(Object.keys(w)), confirmDel: false, opener: document.activeElement };
+    // w·r·e: 그날 계획과 다르게 한 무게·횟수·세트, ew: 입력칸을 연 종목
+    const open = new Set([...Object.keys(w), ...Object.keys(rr), ...Object.keys(e)]);
+    sheet = { kind: 'log', mode, day, li, res, w, r: rr, e, ew: open, confirmDel: false, opener: document.activeElement };
     $('sheet').hidden = false;
     renderSheet(model(weekMon + 6));
     const first = $('panel').querySelector('button');
@@ -1004,25 +1014,26 @@
       <div class="lrows">`;
     for (const r of rows) {
       const v = sheet.res[r.id];
-      // 무게를 바꿀 수 있는 종목 (고무밴드·무게 생략 제외). 고치기에서는 r.w가 그날 바꾼 무게, r.plan이 계획 무게.
-      const can = !r.band && r.w != null;
-      const plan = r.plan != null ? r.plan : r.w;
-      const cw = can ? changedW(r.id, plan) : null;
-      const shownRow = Object.assign({}, r, { w: cw != null ? cw : plan, plan: undefined });
-      const pl = plates(shownRow);
-      const planTxt = can ? L.fmtW(Object.assign({}, r, { w: plan })) : '';
-      h += `<div class="lrow"><div><div class="nm">${esc(r.name)}${flags(shownRow)}</div><div class="rx"><b>${wHtml(shownRow)}</b> · ${r.reps}회 × ${r.sets}세트${cw != null ? ` <span class="planw">계획 ${esc(planTxt)}</span>` : ''}</div>
+      // 계획(고치기에서는 그날 계획: plan·planR·planE)과 지금 고른 값. 무게는 고무밴드·무게 생략 종목이면 못 바꾼다.
+      const canW = !r.band && r.w != null;
+      const pl0 = { w: r.plan != null ? r.plan : r.w, reps: r.planR != null ? r.planR : r.reps, sets: r.planE != null ? r.planE : r.sets };
+      const ch = changedOf(r.id, pl0, canW);
+      const cur = Object.assign({}, r, { w: ch.w != null ? ch.w : pl0.w, reps: ch.reps || pl0.reps, sets: ch.sets || pl0.sets, plan: undefined, planR: undefined, planE: undefined });
+      const any = ch.w != null || ch.reps || ch.sets;
+      const planTxt = `${canW ? L.fmtW(Object.assign({}, r, { w: pl0.w })) + ' · ' : ''}${pl0.reps}회 × ${pl0.sets}세트`;
+      const pl = plates(cur);
+      h += `<div class="lrow"><div><div class="nm">${esc(r.name)}${flags(cur)}</div><div class="rx"><b>${wHtml(cur)}</b> · ${cur.reps}회 × ${cur.sets}세트${any ? ` <span class="planw">계획 ${esc(planTxt)}</span>` : ''}</div>
         ${pl ? `<div class="rx pl-line"><span class="pl">${pl.label}</span>${esc(pl.text)}</div>` : ''}${pl && pl.unbalanced ? `<div class="rx bal">${BALANCE_NOTE}</div>` : ''}
-        ${can && !sheet.ew.has(r.id) ? `<button type="button" class="linkbtn" data-act="lwOpen" data-id="${esc(r.id)}">무게 바꾸기</button>` : ''}</div>
+        ${!sheet.ew.has(r.id) ? `<button type="button" class="linkbtn" data-act="lwOpen" data-id="${esc(r.id)}">${canW ? '무게·횟수·세트' : '횟수·세트'} 바꾸기</button>` : ''}</div>
         <div class="seg" role="group" aria-label="${esc(r.name)} 결과">
           <button type="button" class="y" data-act="res" data-id="${esc(r.id)}" data-v="1" aria-pressed="${v === true}">성공</button>
           <button type="button" class="n" data-act="res" data-id="${esc(r.id)}" data-v="0" aria-pressed="${v === false}">실패</button>
-        </div>${can && sheet.ew.has(r.id) ? `<div class="lw">
-          <label class="field"><span>오늘 한 무게 (kg) · 계획 ${esc(planTxt)}</span><input type="number" inputmode="decimal" step="0.5" min="0" id="lw-${esc(r.id)}" data-lw="${esc(r.id)}" value="${cw != null ? cw : L.roundW(plan)}"></label>
-          <button type="button" class="btn ghost" data-act="lwReset" data-id="${esc(r.id)}">계획대로</button>
-          <p class="small">${cw == null ? '계획보다 무겁게 하면 성공했을 때만, 가볍게 하면 성공·실패 모두 바꾼 무게에서 이어 가요.'
-            : cw > plan ? `성공하면 이 세션의 남은 운동과 다음 세션을 ${esc(L.fmtW(Object.assign({}, r, { w: cw })))}에서 이어 가고, 실패하면 계획 무게(${esc(planTxt)})로 실패한 것으로 봐요.`
-            : `성공·실패 모두 이 세션의 남은 운동과 다음 세션을 ${esc(L.fmtW(Object.assign({}, r, { w: cw })))}에서 이어 가요.`}</p></div>` : ''}</div>`;
+        </div>${sheet.ew.has(r.id) ? `<div class="lw"><div class="lwf">
+          ${canW ? `<label class="field"><span>무게 (kg)</span><input type="number" inputmode="decimal" step="0.5" min="0" id="lw-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="w" value="${ch.w != null ? ch.w : L.roundW(pl0.w)}"></label>` : ''}
+          <label class="field"><span>횟수</span><input type="number" inputmode="numeric" step="1" min="1" id="lr-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="r" value="${cur.reps}"></label>
+          <label class="field"><span>세트</span><input type="number" inputmode="numeric" step="1" min="1" id="le-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="e" value="${cur.sets}"></label></div>
+          <div class="lwfoot"><span class="small">바꾼 값은 저장할 때 남아요</span><button type="button" class="btn ghost" data-act="lwReset" data-id="${esc(r.id)}">계획대로</button></div>
+          ${changeHints(r, pl0, ch)}</div>` : ''}</div>`;
     }
     h += '</div>';
     if (others.length) h += `<p class="small">오늘은 쉬는 종목: ${others.map((r) => esc(r.name)).join(', ')}</p>`;
@@ -1042,6 +1053,29 @@
     const w = Number(sheet.w[id]);
     return w > 0 && Math.abs(w - plan) >= 0.005 ? Math.round(w * 100) / 100 : null;
   }
+  // 계획(pl0: w·reps·sets)과 다르게 고른 무게·횟수·세트 (같으면 null)
+  function changedOf(id, pl0, canW) {
+    const n = (v, p) => (Number.isInteger(v) && v >= 1 && v !== p ? v : null);
+    return { w: canW ? changedW(id, pl0.w) : null, reps: n(sheet.r[id], pl0.reps), sets: n(sheet.e[id], pl0.sets) };
+  }
+  // 바꾼 값이 다음 계산에 어떻게 쓰이는지
+  function changeHints(r, pl0, ch) {
+    const out = [];
+    const W = (w) => esc(L.fmtW(Object.assign({}, r, { w })));
+    if (ch.w != null) {
+      out.push(ch.w > pl0.w ? `무게: 성공하면 이 세션의 남은 운동과 다음 세션을 ${W(ch.w)}에서 이어 가고, 실패하면 계획 무게(${W(pl0.w)})로 실패한 것으로 봐요.`
+        : `무게: 성공·실패 모두 이 세션의 남은 운동과 다음 세션을 ${W(ch.w)}에서 이어 가요.`);
+    }
+    if (ch.reps && r.lad) {
+      // 횟수 단계(사다리)를 바꾼 횟수 기준으로 원래 간격만큼 오르내린다
+      const x = { ladder: r.lad }, t = r.rstep, top = r.lad.length - 1;
+      const up = t < top ? L.ladderReps(x, t + 1) - L.ladderReps(x, t) : null;
+      const down = L.ladderReps(x, t) - L.ladderReps(x, t - 1) || 1;
+      out.push(`횟수: 이 세션의 남은 운동은 ${ch.reps}회, 다음 세션은 성공하면 ${up != null ? `${ch.reps + up}회` : `무게를 올려 처음 횟수(${r.lad[0]}회)부터`}, 실패하면 ${Math.max(1, ch.reps - down)}회예요.`);
+    } else if (ch.reps) out.push('횟수: 횟수 단계가 없는 종목이라 오늘 기록에만 남아요.');
+    if (ch.sets) out.push('세트: 오늘 기록에만 남아요.');
+    return out.length ? `<p class="small">${out.join('<br>')}</p>` : '';
+  }
   function saveLog() {
     const m = model(weekMon + 6);
     const info = sheetInfo(m);
@@ -1054,17 +1088,21 @@
     for (const r of info.rows) if (r.band && r.id in res) bands[r.id] = (r.bands || []).slice();
     // 그날의 상태·무게·횟수도 남긴다 (나중에 설정을 바꿔도 이 기록은 그대로).
     const s = L.snapOf(info.rows, (r) => r.id in res);
-    // 계획과 다르게 한 무게
-    const w = {};
+    // 계획과 다르게 한 무게·횟수·세트
+    const w = {}, rr = {}, e = {};
     for (const r of info.rows) {
-      if (!(r.id in res) || r.band || r.w == null) continue;
-      const cw = changedW(r.id, r.plan != null ? r.plan : r.w);
-      if (cw != null) w[r.id] = cw;
+      if (!(r.id in res)) continue;
+      const pl0 = { w: r.plan != null ? r.plan : r.w, reps: r.planR != null ? r.planR : r.reps, sets: r.planE != null ? r.planE : r.sets };
+      const ch = changedOf(r.id, pl0, !r.band && r.w != null);
+      if (ch.w != null) w[r.id] = ch.w;
+      if (ch.reps) rr[r.id] = ch.reps;
+      if (ch.sets) e[r.id] = ch.sets;
     }
-    if (Object.values(w).some((x) => x > 1000)) { toast('무게를 확인해 주세요'); return; }
     // 스쿼트부터 시작한 세션이면 그 세션 첫 운동 기록에 남긴다 (고치기는 그때 것 그대로).
     const o = sheet.mode === 'new' ? (info.pos === 0 && info.order === 'S' ? 'S' : null) : data.logs[sheet.li].o;
-    const entry = (d) => Object.assign({ d, res, p: 1 }, o ? { o } : {}, Object.keys(bands).length ? { b: bands } : {}, Object.keys(w).length ? { w } : {}, { s });
+    const some = (x) => Object.keys(x).length > 0;
+    const entry = (d) => Object.assign({ d, res, p: 1 }, o ? { o } : {}, some(bands) ? { b: bands } : {},
+      some(w) ? { w } : {}, some(rr) ? { r: rr } : {}, some(e) ? { e } : {}, { s });
     if (sheet.mode === 'new') {
       data.logs.push(entry(L.toStr(sheet.day)));
       const after = L.simulate(data.cfg, data.logs, today, { until: -Infinity });
@@ -1441,7 +1479,7 @@
       <li>한 세션(운동 6회)을 하는 동안 2일 이상 쉬었다면 세션 뒤 정식 휴식은 건너뛰어요.</li>
       <li>한 종목을 ${L.GAP1}일 이상 쉬면(그 종목을 마지막으로 한 다음 날부터 센 날 수) 성공·실패와 상관없이 그 종목의 세션을 처음부터 다시 하고 한 단계 낮춰요. 횟수 고정은 무게 한 단계(−5% 등), 무게 고정은 횟수 한 단계예요. ${L.GAP2}일 이상이면 한 단계 더 낮춰요. 그 뒤로도 실패하면 다음 세션에 한 단계 낮추는 건 그대로예요.</li>
       <li>하체는 데드리프트·스쿼트 중 더 오래 쉰 쪽으로 세고, 하체 세션을 처음부터 다시 하면 그 세션의 상체·팔도 처음부터 해요(무게는 종목마다 쉰 날 수대로). 상체·팔이 쉬는 하체 마지막 단계 세션은 쉬는 날로 세지 않고, 고무밴드는 낮추지 않아요. 쉰 지 ${L.GAP1 - 2}·${L.GAP1 - 1}일째 되는 날엔 이번 주 화면 위에 알려줘요.</li>
-      <li>기록할 때 종목마다 <b>무게 바꾸기</b>로 실제로 한 무게를 넣을 수 있어요. 계획보다 무겁게 해서 성공하면 그 무게에서, 실패하면 계획 무게에서 이어 가요. 가볍게 했으면 성공·실패 모두 그 무게에서 이어 가요(그 세션의 남은 운동도).</li>
+      <li>기록할 때 종목마다 <b>무게·횟수·세트 바꾸기</b>로 실제로 한 대로 넣을 수 있어요. 횟수 단계가 있는 종목은 바꾼 횟수에서 원래 간격만큼 오르내리고(성공·실패 모두), 세트는 그날 기록에만 남아요. 계획보다 무겁게 해서 성공하면 그 무게에서, 실패하면 계획 무게에서 이어 가요. 가볍게 했으면 성공·실패 모두 그 무게에서 이어 가요(그 세션의 남은 운동도).</li>
       <li>휴식일에도 운동했다면 기록할 수 있고, 기록하면 운동한 날로 계산해요.</li>
       <li>이미 하던 루틴이면 시작 지점을 그 세션·순서·무게로 옮기고, 그 뒤 지난 날들을 날짜순으로 기록해 이어가요.</li>
       <li>스쿼트 시작 무게는 따로 넣을 수 있어요(비워 두면 추천 무게 = 데드리프트 ÷ 1.2). 둘은 한 묶음으로 같은 단계를 같이 오르내려요. 하체를 하나라도 실패하면 다음 세션은 한 단계 낮춰 다시 해요.</li>
@@ -1755,8 +1793,8 @@
       save(`세션 ${no} · ${TYPE_NAME[v]}부터 해요`);
       if (sheet && sheet.kind === 'log') renderSheet(model(weekMon + 6));
     }
-    else if (act === 'lwOpen') { sheet.ew.add(b.dataset.id); renderSheet(model(weekMon + 6)); const el = $('lw-' + b.dataset.id); if (el) { el.focus(); el.select(); } }
-    else if (act === 'lwReset') { delete sheet.w[b.dataset.id]; sheet.ew.delete(b.dataset.id); renderSheet(model(weekMon + 6)); }
+    else if (act === 'lwOpen') { sheet.ew.add(b.dataset.id); renderSheet(model(weekMon + 6)); const el = $('lw-' + b.dataset.id) || $('lr-' + b.dataset.id); if (el) { el.focus(); el.select(); } }
+    else if (act === 'lwReset') { for (const k of ['w', 'r', 'e']) delete sheet[k][b.dataset.id]; sheet.ew.delete(b.dataset.id); renderSheet(model(weekMon + 6)); }
     else if (act === 'askDel') { sheet.confirmDel = true; renderSheet(model(weekMon + 6)); }
     else if (act === 'keepLog') { sheet.confirmDel = false; renderSheet(model(weekMon + 6)); }
     else if (act === 'delLog') { data.logs.pop(); closeSheet(); commit('기록을 지웠어요'); }
@@ -1815,9 +1853,10 @@
     else if (t.dataset.pm && pendingMode) { if (t.dataset.pm === 'name') pendingMode.name = t.value; else pendingMode.w = t.value === '' ? null : Number(t.value) > 0 ? Number(t.value) : pendingMode.w; }
     else if (t.dataset.addpick && sheet && sheet.kind === 'add') { sheet.pick = t.value; sheet.x = draftEx(PRESETS.find((x) => x.id === t.value) || null, sheet.x.day); sheet.err = ''; renderAdd(); }
     else if (t.dataset.lw && sheet && sheet.kind === 'log') {
-      const v = Number(t.value);
-      if (t.value !== '' && !(v > 0 && v <= 1000)) { toast('무게를 확인해 주세요'); t.value = sheet.w[t.dataset.lw] || ''; return; }
-      if (t.value === '') delete sheet.w[t.dataset.lw]; else sheet.w[t.dataset.lw] = v;
+      const id = t.dataset.lw, f = t.dataset.lf || 'w', box = sheet[f], v = Number(t.value);
+      const ok = f === 'w' ? v > 0 && v <= 1000 : Number.isInteger(v) && v >= 1 && v <= 100;
+      if (t.value !== '' && !ok) { toast(f === 'w' ? '무게를 확인해 주세요' : `${f === 'r' ? '횟수' : '세트'}는 1~100 사이 정수로 넣어 주세요`); renderSheet(model(weekMon + 6)); return; }
+      if (t.value === '') delete box[id]; else box[id] = v;
       renderSheet(model(weekMon + 6));
     }
     else if (t.dataset.k) applySetting(t);

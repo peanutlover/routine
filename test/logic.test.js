@@ -663,7 +663,7 @@ test('오래 쉬면 처음부터: 처음부터 다시 한 날을 기록하면 �
 });
 
 // 앱처럼 하루씩 기록한다: 그날 할 종목을 모두 하고(fail(no, id)면 실패) 그날 상태를 남긴다.
-function logDaily(c, logs, days, fail = () => false, ovw = () => null) {
+function logDaily(c, logs, days, fail = () => false, ovw = () => null, ovr = () => null) {
   let d = logs.length ? L.toNum(logs[logs.length - 1].d) + 1 : L.toNum(c.startDate);
   for (let k = 0; k < days; d++) {
     const n = L.simulate(c, logs, L.toStr(d), { until: -Infinity }).next;
@@ -671,7 +671,9 @@ function logDaily(c, logs, days, fail = () => false, ovw = () => null) {
     for (const r of n.rows) if (r.avail === 'ok') res[r.id] = !fail(n.no, r.id);
     const w = {};
     for (const r of n.rows) if (r.id in res && ovw(n.no, r.id, n)) w[r.id] = ovw(n.no, r.id, n);
-    logs.push(Object.assign({ d: L.toStr(d), res, p: 1, s: L.snapOf(n.rows, (r) => r.id in res) }, Object.keys(w).length ? { w } : {},
+    const rr = {};
+    for (const r of n.rows) if (r.id in res && ovr(n.no, r.id, n)) rr[r.id] = ovr(n.no, r.id, n);
+    logs.push(Object.assign({ d: L.toStr(d), res, p: 1, s: L.snapOf(n.rows, (r) => r.id in res) }, Object.keys(w).length ? { w } : {}, Object.keys(rr).length ? { r: rr } : {},
       n.pos === 0 && n.order === 'S' ? { o: 'S' } : {}));
     k++;
   }
@@ -818,4 +820,41 @@ test('새 세션에서 스쿼트를 먼저 하면 S·D 번갈아, 보조 종목�
   assert.equal(after.cur.no, 3);
   assert.equal(after.main[1].out, true);
   for (const id of ['lat', 'press']) assert.equal(after.acc[id][1].done, true);
+});
+
+// 덤벨컬(데드 날, 무게 고정 4·6·8회)만 남기고, 세션 no의 첫 덤벨컬을 reps회로 해서 ok
+function overCurl(no, reps, ok) {
+  const c = cfg();
+  c.acc = c.acc.filter((a) => a.id === 'curl');
+  Object.assign(c.acc[0], { ladder: [4, 6, 8] });
+  let done = false;
+  const first = (n, id) => n.no === no && id === 'curl' && n.pos === 0;
+  const logs = logDaily(c, [], 7 * no + 2, (nn, id) => !ok && nn === no && id === 'curl' && !done && (done = true),
+    () => null, (nn, id, n) => (first(n, id) ? reps : null));
+  const sim = L.simulate(c, logs, null, { until: L.toNum(TODAY) + 7 * no + 40, minSessions: no + 4 });
+  return { s: Array.from({ length: no + 3 }, (_, i) => sim.view(i + 1).acc.curl).map((p) => (p.skip ? '쉼' : `${p.w}x${p.reps}`)), rows: [...sim.days.values()].filter((e) => e.kind === 'log' && e.no === no && e.type === 'D').map((e) => e.rows.find((r) => r.id === 'curl').reps) };
+}
+
+test('기록할 때 횟수를 바꾸면: 무게 고정 사다리에서 바꾼 횟수 기준으로 원래 간격만큼 오르내린다', () => {
+  // 4·6·8회의 6회 차례(세션 2)에 10회 성공 → 남은 운동 10회, 다음 세션 12회, 그다음 무게를 올리고 4회부터
+  const up = overCurl(2, 10, true);
+  assert.deepEqual(up.rows, [10, 10, 10]);
+  assert.deepEqual(up.s, ['3x4', '3x6', '3x12', '쉼', '4x4']);    // 세션 목록은 그 세션 첫 기록 때 계획(6회)
+  // 4회 차례(세션 1)에 8회 실패 → 8회에서 한 단계(2회) 아래 6회
+  const dn = overCurl(1, 8, false);
+  assert.deepEqual(dn.s.slice(0, 2), ['3x4', '3x6']);
+  // 첫 칸 아래는 첫 두 칸 간격만큼: 4·6·8회의 −1단계 = 2회
+  assert.equal(L.ladderReps({ ladder: [4, 6, 8] }, -1), 2);
+  assert.equal(L.ladderReps({ ladder: [3, 4, 5] }, -2), 1);
+});
+
+test('기록할 때 세트·횟수(횟수 고정)를 바꾸면 그날 기록만 바뀐다', () => {
+  const c = cfg();
+  c.acc = [];
+  const logs = logDaily(c, [], 1);
+  logs[0].r = { dl: 8 }; logs[0].e = { dl: 5 };
+  const sim = L.simulate(c, logs, null, { until: L.toNum(TODAY) + 3 });
+  const r = sim.days.get(L.toNum(TODAY)).rows[0];
+  assert.deepEqual([r.reps, r.sets, r.planR, r.planE], [8, 5, 5, 3]);
+  assert.deepEqual([sim.next.rows[0].reps, sim.next.rows[0].sets], [5, 3]);
 });

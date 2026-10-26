@@ -254,9 +254,11 @@ main.wrap { padding-block: 14px 120px; display: grid; gap: 14px; }
 .lrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--soft); }
 .lrow .nm { font-weight: 600; line-height: 1.3; }
 .lrow .rx { font-size: 13px; color: var(--muted); }
-.lrow .lw { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: end; }
+.lrow .lw { grid-column: 1 / -1; display: grid; gap: 6px; }
+.lrow .lwf { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
 .lrow .lw .field { margin: 0; }
-.lrow .lw .small { grid-column: 1 / -1; margin: 0; }
+.lrow .lwfoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.lrow .lw .small { margin: 0; }
 .lrow .planw { font-size: 12px; }
 .lrow .linkbtn { display: block; }
 .lrow .rx b { font-family: var(--f-display); font-size: 16px; color: var(--ink); font-weight: 600; }
