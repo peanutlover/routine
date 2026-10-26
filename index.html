@@ -152,6 +152,7 @@ main.wrap { padding-block: 14px 120px; display: grid; gap: 14px; }
 .meta { font-size: 13px; color: var(--muted); }
 .daybody { border-top: 1px solid var(--line); }
 .dayfoot { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px 14px; }
+.day > .orderpick { margin: 0; padding: 0 14px 12px; }
 .dayfoot .hint { font-size: 13px; color: var(--muted); align-self: center; }
 
 .ex { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -288,6 +289,9 @@ main.wrap { padding-block: 14px 120px; display: grid; gap: 14px; }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button[aria-pressed="true"].y { background: var(--ok); color: #fff; }
 .seg button[aria-pressed="true"].n { background: var(--bad); color: #fff; }
+.orderpick { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; margin: 8px 0; font-size: 13px; color: var(--muted); }
+.seg button[aria-pressed="true"].D { background: var(--dl); color: var(--dl-ink); }
+.seg button[aria-pressed="true"].S { background: var(--sq); color: var(--sq-ink); }
 
 /* ---------- 시작 지점 ---------- */
 .startsum { font-size: 14px; }
@@ -830,7 +834,7 @@ const RoutineLogic = (() => {
   // 세션 6번째 운동 다음 날은 정식 휴식. 단, 그 세션을 하는 동안 REST_SKIP일 이상 쉬었다면 건너뛴다.
   // 휴식일에도 기록하면 운동한 날로 계산한다.
   // 기록 형식: {d, res:{종목id: true|false}, p:1}. p가 없는 예전 기록은 고르지 않은 종목을 성공으로 본다.
-  //   w:{종목id: 무게} = 그날 계획과 다른 무게로 했으면 실제로 든 무게.
+  //   w:{종목id: 무게} = 그날 계획과 다른 무게로 했으면 실제로 든 무게. o:'S' = 그 세션을 스쿼트부터 했다 (세션 첫 운동 기록에).
   // 무게를 바꿔서 했으면 그 무게를 기준으로 그 세션의 남은 운동과 다음 세션을 계산한다. 단, 계획보다 무겁게 해서 실패했으면
   //   계획 무게가 기준이다 (그 무게로 실패 처리). 계획보다 가볍게 했으면 성공·실패 모두 바꾼 무게가 기준.
   // 오래 쉬면 처음부터: 한 종목을 GAP1일 이상 쉬면(마지막으로 한 다음 날부터 다시 하는 날 전날까지 센 날 수) 성공·실패와 상관없이
@@ -839,7 +843,6 @@ const RoutineLogic = (() => {
   //   상체·팔은 종목마다 따로 센다. 하체가 마지막 단계라 상체·팔이 쉬는 세션은 쉬는 날로 세지 않고, 고무밴드는 낮추지 않는다.
   //   그 종목을 한 번도 하지 않았으면 세지 않는다. cfg.restFrom 이전 날에는 적용하지 않는다.
   const REST_SKIP = 2;
-  const accSlot = (type, j) => SLOTS * Math.floor(j / 3) + 2 * (j % 3) + (type === 'S' ? 1 : 0);
 
   function mainRow(cfg, mp, type) {
     return {
@@ -914,7 +917,8 @@ const RoutineLogic = (() => {
   }
 
   // opts.until: 이 날까지 예상(모두 성공 가정)을 채운다. opts.minSessions: 하체·모든 보조 종목이 적어도 이만큼 세션을 갖도록 채운다.
-  const jStart = (type, k) => (type === 'D' ? Math.ceil(k / 2) : Math.floor(k / 2));   // 세션의 k번째 운동까지 지난 그 날 차례 수
+  // 세션의 k번째 운동까지 지난 그 날(type) 차례 수. first = 그 세션에서 먼저 하는 하체.
+  const jStart = (type, k, first = 'D') => (type === first ? Math.ceil(k / 2) : Math.floor(k / 2));
   function simulate(cfg, logs, today, opts = {}) {
     const sp = startPoint(cfg);
     const init = initState(cfg);
@@ -925,7 +929,7 @@ const RoutineLogic = (() => {
     const MG = { D: null, S: null, anchor: null, dropped: 0 };
     const S = [];
     const openMain = (i, m) => {
-      S[i] = { no: sp.no + i, i, state: m, presc: mainPresc(cfg, m), first: i === 0 ? sp.k : 0, n: i === 0 ? sp.k : 0, res: [],
+      S[i] = { no: sp.no + i, i, order: 'D', state: m, presc: mainPresc(cfg, m), first: i === 0 ? sp.k : 0, n: i === 0 ? sp.k : 0, res: [],
         done: false, out: null, bundleDone: false, firstDay: null, lastDay: null, rests: 0, restSkip: false, snap: null };
     };
     // 하체 세션을 열자마자 그 세션 첫 기록에 남은 상태로 맞춘다 (상체·팔이 쉬는 세션인지도 그때대로).
@@ -954,7 +958,7 @@ const RoutineLogic = (() => {
         const i = X.i, s = X.sess[i];
         const p = accP(X, i);
         if (p.off || p.skip) X.j = Math.max(X.j, 3 * (i + 1));
-        else if (X.a.fromK > 0 && s.no === X.a.from && !s.full) X.j = Math.max(X.j, 3 * i + jStart(X.a.day, X.a.fromK));
+        else if (X.a.fromK > 0 && s.no === X.a.from && !s.full) X.j = Math.max(X.j, 3 * i + jStart(X.a.day, X.a.fromK, S[i] ? S[i].order : 'D'));
         if (X.j < 3 * (i + 1) || !S[i].done) return;
         s.done = true;
         s.out = p.off || p.skip ? null : !s.res.includes(false);
@@ -1008,10 +1012,18 @@ const RoutineLogic = (() => {
     // avail: ok(오늘 함) · skip(하체가 마지막 단계라 쉼) · wait(하체보다 앞서지 않으려고 쉼). lag = 지난 차례가 밀려서 하는 것.
     // rested = 그 세션을 오래 쉬어서 낮춘 단계 수, restart = 그 날 처음부터 다시 시작했으면 그때 쉰 날 수.
     // snaps: 기록한 날이면 그날 남긴 상태 (그 종목 세션의 첫 기록이면 그 상태로 맞춘다). 행마다 지금 상태(snap)를 붙인다.
+    // 세션마다 먼저 하는 하체(order: 'D' 데드리프트 · 'S' 스쿼트). 세션의 첫 운동을 할 때(처음부터 다시 할 때 포함) 정한다:
+    //   기록한 날은 그 기록의 o, 아직 안 한 세션은 고른 것(cfg.order = {no, o}), 없으면 데드리프트 먼저.
+    // 보조 종목 X의 j번째 차례가 놓이는 칸: 그 세션에서 자기 하체가 먼저면 짝수 칸, 아니면 홀수 칸.
+    const firstOf = (k) => (S[k] ? S[k].order : 'D');
+    const accSlot = (type, j) => SLOTS * Math.floor(j / 3) + 2 * (j % 3) + (type === firstOf(Math.floor(j / 3)) ? 0 : 1);
+    const pend = cfg.order && cfg.order.o === 'S' ? cfg.order : null;
     const restOf = (s, day) => ({ rested: s.reset ? s.reset.drops : 0, restart: s.reset && s.reset.day === day ? s.reset.R : 0 });
-    function plan(day, snaps) {
+    function plan(day, snaps, o) {
       restMain(day, snaps && snaps.main);
-      const i = S.length - 1, type = slotType(g);
+      const i = S.length - 1, cur = S[i];
+      if (cur.n === 0) cur.order = o || (pend && pend.no === cur.no ? 'S' : 'D');
+      const type = cur.order === 'S' ? slotType(g + 1) : slotType(g);
       const rows = [Object.assign(mainRow(cfg, S[i].presc, type), { avail: 'ok', snap: mainSnap(cfg, S[i]) }, restOf(S[i], day))];
       for (const X of A) {
         if (X.a.day !== type) continue;
@@ -1025,7 +1037,7 @@ const RoutineLogic = (() => {
         if (sn && at <= g && !s.res.length && !s.snap) { s.snap = sn; s.state = accFromSnap(cfg, X.a, s.state, sn); s.presc = null; p = accP(X, X.i); }
         rows.push(Object.assign(accRow(X.a, p), { avail: at <= g ? 'ok' : 'wait', lag: at < g, accNo: s.no, snap: accSnap(X.a, s.state, p) }, restOf(s, day)));
       }
-      return { g, slot: g, type, no: S[i].no, pos: slotPos(g), main: S[i].presc, rows };
+      return { g, slot: g, type, order: cur.order, no: S[i].no, pos: slotPos(g), main: S[i].presc, rows };
     }
     // 기록한 날은 그때 보여준 무게·횟수·세트·단계를 그대로 보여준다.
     // 예전 기록(Q 없음)의 스쿼트는 데드리프트 ÷ ratio
@@ -1121,7 +1133,7 @@ const RoutineLogic = (() => {
       const ld = toNum(lg.d);
       for (; d < ld; d++) quiet(d);
       const sn = lg.s || null;
-      const info = plan(ld, sn);
+      const info = plan(ld, sn, lg.o === 'S' ? 'S' : 'D');
       // 고무밴드는 기록한 날 쓴 밴드를 남긴다 (설정에서 밴드를 바꿔도 지난 기록은 그대로).
       if (lg.b) for (const r of info.rows) if (r.band && Array.isArray(lg.b[r.id])) r.bands = lg.b[r.id].slice();
       if (sn) shown(info, sn);
@@ -1450,6 +1462,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
       restFrom: /^\d{4}-\d{2}-\d{2}$/.test(c.restFrom) ? c.restFrom : null,
       from: sanitizeFrom(c.from),
       restSec: sanitizeRest(c.restSec),
+      // 아직 시작하지 않은 세션 no를 스쿼트부터 하기로 골랐으면 {no, o:'S'}
+      order: c.order && c.order.o === 'S' && Number(c.order.no) >= 1 ? { no: Math.floor(Number(c.order.no)), o: 'S' } : null,
       plates: Array.isArray(c.plates) ? [...L.plateCounts(c.plates)].flatMap(([p, n]) => Array(Math.min(n, PAIR_MAX)).fill(p)).sort((a, b) => a - b) : base.plates,
       gear: {
         db: Array.isArray(g.db) ? numList(g.db) : base.gear.db,
@@ -1466,6 +1480,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
       .map((l) => {
         const o = { d: l.d, res: l.res && typeof l.res === 'object' ? l.res : {} };
         if (l.p) o.p = 1;
+        if (l.o === 'S') o.o = 'S';
         // 그날 계획과 다르게 한 무게
         if (l.w && typeof l.w === 'object') {
           const w = {};
@@ -1645,6 +1660,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
   const toMode = (m) => josa(modeName(m), '으로', '로');
   const BALANCE_NOTE = '<strong>좌우 균형:</strong> 원판을 더 끼운 쪽은 끝까지 밀어 넣고 바깥으로 움직이지 않게 마구리로 고정하세요. 반대쪽은 원판을 조금 바깥쪽에 둔 채 마구리를 끼우세요.';
   const STEPS = ['', '한', '두'];
+  // 새 세션에서 먼저 할 하체 고르기 (세션 no, 지금 고른 order)
+  function orderPick(no, order) {
+    const b = (v) => `<button type="button" class="${v}" data-act="order" data-no="${no}" data-v="${v}" aria-pressed="${order === v}">${TYPE_NAME[v]} 먼저</button>`;
+    return `<div class="orderpick"><span>세션 ${no} 시작 · 먼저 할 운동</span><div class="seg" role="group" aria-label="세션 ${no}에서 먼저 할 운동">${b('D')}${b('S')}</div></div>`;
+  }
   function flags(row) {
     let f = '';
     if (row.retry) f += '<span class="flag retry">재도전</span>';
@@ -1793,8 +1813,10 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
       if (isLog) foot = `<button class="btn ghost" type="button" data-act="edit" data-day="${d}">결과 고치기</button>`;
       else if (L.canLog(m.tl, d)) foot = `<button class="btn" type="button" data-act="log" data-day="${d}">운동 기록하기</button><span class="hint">끝나면 한 종목만 골라도 저장돼요</span>`;
       if (isToday) foot = timerButton() + foot;
+      // 다음 운동이 새 세션의 첫 운동이면 데드리프트·스쿼트 중 먼저 할 것을 고른다.
+      const pick = e.kind === 'plan' && d === m.tl.cursor && e.pos === 0 ? orderPick(e.no, e.order) : '';
       html += `<section class="day${isToday ? ' is-today' : ''}" id="d${d}"><div class="dayhead">${date}<div class="dayinfo"><div class="tagline">${tags}</div><div class="meta">${esc(meta)}</div></div></div>
-        <div class="daybody">${exTable(e.rows, isLog, type)}</div>${foot ? `<div class="dayfoot">${foot}</div>` : ''}</section>`;
+        ${pick}<div class="daybody">${exTable(e.rows, isLog, type)}</div>${foot ? `<div class="dayfoot">${foot}</div>` : ''}</section>`;
     }
     $('days').innerHTML = html;
   }
@@ -2382,6 +2404,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
     const isLast = sheet.mode === 'edit' && sheet.li === data.logs.length - 1;
     let h = `<div><h2 id="sheetTitle">${longDate(sheet.day)} · ${TYPE_NAME[info.type]}</h2>
       <div class="sub">세션 ${info.no} · ${info.pos + 1}/6 · ${esc(stageText(info.main))}</div></div>
+      ${sheet.mode === 'new' && info.pos === 0 ? orderPick(info.no, info.order) : ''}
       <p class="small">목표 횟수×세트를 모두 채웠으면 성공, 한 세트라도 못 채웠으면 실패예요. <strong>하지 않은 종목은 비워 두세요.</strong> 다음 ${TYPE_NAME[info.type]} 날로 밀려요. 누른 버튼을 한 번 더 누르면 선택이 풀려요.</p>`;
     const restarted = rows.filter((r) => r.restart);
     if (restarted.length) h += `<p class="small note">오래 쉬어서 세션을 처음부터 다시 해요: ${restarted.map((r) => `${esc(r.main ? '데드리프트·스쿼트' : r.name)} ${r.restart}일 쉼 → ${STEPS[r.rested] || r.rested} 단계 낮춤`).join(', ')}</p>`;
@@ -2447,7 +2470,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
       if (cw != null) w[r.id] = cw;
     }
     if (Object.values(w).some((x) => x > 1000)) { toast('무게를 확인해 주세요'); return; }
-    const entry = (d) => Object.assign({ d, res, p: 1 }, Object.keys(bands).length ? { b: bands } : {}, Object.keys(w).length ? { w } : {}, { s });
+    // 스쿼트부터 시작한 세션이면 그 세션 첫 운동 기록에 남긴다 (고치기는 그때 것 그대로).
+    const o = sheet.mode === 'new' ? (info.pos === 0 && info.order === 'S' ? 'S' : null) : data.logs[sheet.li].o;
+    const entry = (d) => Object.assign({ d, res, p: 1 }, o ? { o } : {}, Object.keys(bands).length ? { b: bands } : {}, Object.keys(w).length ? { w } : {}, { s });
     if (sheet.mode === 'new') {
       data.logs.push(entry(L.toStr(sheet.day)));
       const after = L.simulate(data.cfg, data.logs, today, { until: -Infinity });
@@ -2817,7 +2842,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
     h += `<div class="btnrow"><button class="btn ghost" type="button" data-act="addAcc" data-day="D">+ 데드 날 운동</button><button class="btn ghost" type="button" data-act="addAcc" data-day="S">+ 스쿼트 날 운동</button></div></div>`;
 
     h += `<div class="card"><h2>규칙</h2><ul class="rules">
-      <li>한 세션은 운동 6회(데드리프트 날 → 스쿼트 날 번갈아 3회씩). 6번째 운동을 마친 다음 날 하루 쉬어요. 고정으로 쉬는 요일은 없어요.</li>
+      <li>한 세션은 운동 6회(데드리프트 날 → 스쿼트 날 번갈아 3회씩). 새 세션의 첫 운동 날에는 스쿼트를 먼저 하도록 고를 수 있어요(스쿼트 → 데드리프트 번갈아). 6번째 운동을 마친 다음 날 하루 쉬어요. 고정으로 쉬는 요일은 없어요.</li>
       <li>기록하지 않고 지나간 날은 쉰 날로 보고, 그날 운동을 다음 날로 미뤄요. 운동하고 깜빡했다면 그날을 눌러 나중에 기록할 수 있어요.</li>
       <li>기록할 때 한 종목만 골라도 저장돼요. 고르지 않은 종목은 안 한 것으로 보고 다음 같은 날(데드 날·스쿼트 날)로 밀려요. 하체를 안 했으면 다음 날도 같은 하체 날이에요.</li>
       <li>상체·팔은 자기 하체 날에만 하고 하체보다 앞서 가지 않아요. 밀린 종목은 지난 세션 몫부터 차례로 하고, 하체를 따라가느라 쉬는 날은 휴식으로 봐요.</li>
@@ -3132,6 +3157,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = RoutineLog
     else if (act.startsWith('t') && /^t(Start|Skip|Undo|Reset|Edit|Save)$/.test(act)) timerAct(act, b.dataset.id);
     else if (act === 'chartMode') { chartMode = b.dataset.v === 'each' ? 'each' : 'all'; renderChart(); }
     else if (act === 'chartToggle') { const k = b.dataset.key; if (chartOff.has(k)) chartOff.delete(k); else chartOff.add(k); renderChart(); }
+    else if (act === 'order') {
+      const no = Number(b.dataset.no), v = b.dataset.v === 'S' ? 'S' : 'D';
+      data.cfg.order = v === 'S' ? { no, o: 'S' } : null;
+      save(`세션 ${no} · ${TYPE_NAME[v]}부터 해요`);
+      if (sheet && sheet.kind === 'log') renderSheet(model(weekMon + 6));
+    }
     else if (act === 'lwOpen') { sheet.ew.add(b.dataset.id); renderSheet(model(weekMon + 6)); const el = $('lw-' + b.dataset.id); if (el) { el.focus(); el.select(); } }
     else if (act === 'lwReset') { delete sheet.w[b.dataset.id]; sheet.ew.delete(b.dataset.id); renderSheet(model(weekMon + 6)); }
     else if (act === 'askDel') { sheet.confirmDel = true; renderSheet(model(weekMon + 6)); }

@@ -671,7 +671,8 @@ function logDaily(c, logs, days, fail = () => false, ovw = () => null) {
     for (const r of n.rows) if (r.avail === 'ok') res[r.id] = !fail(n.no, r.id);
     const w = {};
     for (const r of n.rows) if (r.id in res && ovw(n.no, r.id, n)) w[r.id] = ovw(n.no, r.id, n);
-    logs.push(Object.assign({ d: L.toStr(d), res, p: 1, s: L.snapOf(n.rows, (r) => r.id in res) }, Object.keys(w).length ? { w } : {}));
+    logs.push(Object.assign({ d: L.toStr(d), res, p: 1, s: L.snapOf(n.rows, (r) => r.id in res) }, Object.keys(w).length ? { w } : {},
+      n.pos === 0 && n.order === 'S' ? { o: 'S' } : {}));
     k++;
   }
   return logs;
@@ -791,4 +792,30 @@ test('기록할 때 무게를 바꾸면: 보조 종목(무게 고정·횟수 고
   assert.equal(sim.acc.ohp[1].presc.w, 15);
   const again = L.snapLogs(c, logs.map((l) => Object.assign({}, l)), 0);
   assert.deepEqual(loggedRows(c, again, 'bench'), loggedRows(c, logs, 'bench'));
+});
+
+test('새 세션에서 스쿼트를 먼저 하면 S·D 번갈아, 보조 종목도 자기 하체 날에 따라가고 기록한 세션 순서는 그대로', () => {
+  const c = cfg();
+  const s0 = L.toNum(TODAY);
+  const logs = logDaily(c, [], 6);                       // 세션 1 (D S D S D S)
+  c.order = { no: 2, o: 'S' };
+  const tl = L.simulate(c, logs, L.toStr(s0 + 6), { until: s0 + 20 });
+  const s2 = [...tl.days.values()].filter((e) => e.kind === 'plan' && e.no === 2);
+  assert.deepEqual(s2.map((e) => e.type).join(''), 'SDSDSD');
+  assert.deepEqual(s2[0].rows.map((r) => r.id), ['sq', 'press', 'tri', 'side', 'rear']);
+  assert.ok(s2[0].rows.every((r) => r.avail === 'ok'));
+  assert.deepEqual(s2[1].rows.map((r) => [r.id, r.avail]), [['dl', 'ok'], ['lat', 'ok'], ['curl', 'ok'], ['ohp', 'ok']]);
+  const s3 = [...tl.days.values()].filter((e) => e.kind === 'plan' && e.no === 3);
+  assert.equal(s3.map((e) => e.type).join(''), 'DSDSDS');   // 고르지 않은 세션은 데드리프트 먼저
+  // 세션 2를 스쿼트부터 기록한 뒤 고른 것을 지워도 기록은 그대로
+  logDaily(c, logs, 7);
+  assert.equal(logs.filter((l) => l.o).length, 1);
+  c.order = null;
+  const after = L.simulate(c, logs, null, { until: -Infinity });
+  const s2l = [...after.days.values()].filter((e) => e.kind === 'log' && e.no === 2);
+  assert.equal(s2l.map((e) => e.type).join(''), 'SDSDSD');
+  assert.ok(s2l.every((e) => e.rows.every((r) => r.avail === 'ok' && r.result === true)));
+  assert.equal(after.cur.no, 3);
+  assert.equal(after.main[1].out, true);
+  for (const id of ['lat', 'press']) assert.equal(after.acc[id][1].done, true);
 });

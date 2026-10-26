@@ -342,7 +342,7 @@ const RoutineLogic = (() => {
   // 세션 6번째 운동 다음 날은 정식 휴식. 단, 그 세션을 하는 동안 REST_SKIP일 이상 쉬었다면 건너뛴다.
   // 휴식일에도 기록하면 운동한 날로 계산한다.
   // 기록 형식: {d, res:{종목id: true|false}, p:1}. p가 없는 예전 기록은 고르지 않은 종목을 성공으로 본다.
-  //   w:{종목id: 무게} = 그날 계획과 다른 무게로 했으면 실제로 든 무게.
+  //   w:{종목id: 무게} = 그날 계획과 다른 무게로 했으면 실제로 든 무게. o:'S' = 그 세션을 스쿼트부터 했다 (세션 첫 운동 기록에).
   // 무게를 바꿔서 했으면 그 무게를 기준으로 그 세션의 남은 운동과 다음 세션을 계산한다. 단, 계획보다 무겁게 해서 실패했으면
   //   계획 무게가 기준이다 (그 무게로 실패 처리). 계획보다 가볍게 했으면 성공·실패 모두 바꾼 무게가 기준.
   // 오래 쉬면 처음부터: 한 종목을 GAP1일 이상 쉬면(마지막으로 한 다음 날부터 다시 하는 날 전날까지 센 날 수) 성공·실패와 상관없이
@@ -351,7 +351,6 @@ const RoutineLogic = (() => {
   //   상체·팔은 종목마다 따로 센다. 하체가 마지막 단계라 상체·팔이 쉬는 세션은 쉬는 날로 세지 않고, 고무밴드는 낮추지 않는다.
   //   그 종목을 한 번도 하지 않았으면 세지 않는다. cfg.restFrom 이전 날에는 적용하지 않는다.
   const REST_SKIP = 2;
-  const accSlot = (type, j) => SLOTS * Math.floor(j / 3) + 2 * (j % 3) + (type === 'S' ? 1 : 0);
 
   function mainRow(cfg, mp, type) {
     return {
@@ -426,7 +425,8 @@ const RoutineLogic = (() => {
   }
 
   // opts.until: 이 날까지 예상(모두 성공 가정)을 채운다. opts.minSessions: 하체·모든 보조 종목이 적어도 이만큼 세션을 갖도록 채운다.
-  const jStart = (type, k) => (type === 'D' ? Math.ceil(k / 2) : Math.floor(k / 2));   // 세션의 k번째 운동까지 지난 그 날 차례 수
+  // 세션의 k번째 운동까지 지난 그 날(type) 차례 수. first = 그 세션에서 먼저 하는 하체.
+  const jStart = (type, k, first = 'D') => (type === first ? Math.ceil(k / 2) : Math.floor(k / 2));
   function simulate(cfg, logs, today, opts = {}) {
     const sp = startPoint(cfg);
     const init = initState(cfg);
@@ -437,7 +437,7 @@ const RoutineLogic = (() => {
     const MG = { D: null, S: null, anchor: null, dropped: 0 };
     const S = [];
     const openMain = (i, m) => {
-      S[i] = { no: sp.no + i, i, state: m, presc: mainPresc(cfg, m), first: i === 0 ? sp.k : 0, n: i === 0 ? sp.k : 0, res: [],
+      S[i] = { no: sp.no + i, i, order: 'D', state: m, presc: mainPresc(cfg, m), first: i === 0 ? sp.k : 0, n: i === 0 ? sp.k : 0, res: [],
         done: false, out: null, bundleDone: false, firstDay: null, lastDay: null, rests: 0, restSkip: false, snap: null };
     };
     // 하체 세션을 열자마자 그 세션 첫 기록에 남은 상태로 맞춘다 (상체·팔이 쉬는 세션인지도 그때대로).
@@ -466,7 +466,7 @@ const RoutineLogic = (() => {
         const i = X.i, s = X.sess[i];
         const p = accP(X, i);
         if (p.off || p.skip) X.j = Math.max(X.j, 3 * (i + 1));
-        else if (X.a.fromK > 0 && s.no === X.a.from && !s.full) X.j = Math.max(X.j, 3 * i + jStart(X.a.day, X.a.fromK));
+        else if (X.a.fromK > 0 && s.no === X.a.from && !s.full) X.j = Math.max(X.j, 3 * i + jStart(X.a.day, X.a.fromK, S[i] ? S[i].order : 'D'));
         if (X.j < 3 * (i + 1) || !S[i].done) return;
         s.done = true;
         s.out = p.off || p.skip ? null : !s.res.includes(false);
@@ -520,10 +520,18 @@ const RoutineLogic = (() => {
     // avail: ok(오늘 함) · skip(하체가 마지막 단계라 쉼) · wait(하체보다 앞서지 않으려고 쉼). lag = 지난 차례가 밀려서 하는 것.
     // rested = 그 세션을 오래 쉬어서 낮춘 단계 수, restart = 그 날 처음부터 다시 시작했으면 그때 쉰 날 수.
     // snaps: 기록한 날이면 그날 남긴 상태 (그 종목 세션의 첫 기록이면 그 상태로 맞춘다). 행마다 지금 상태(snap)를 붙인다.
+    // 세션마다 먼저 하는 하체(order: 'D' 데드리프트 · 'S' 스쿼트). 세션의 첫 운동을 할 때(처음부터 다시 할 때 포함) 정한다:
+    //   기록한 날은 그 기록의 o, 아직 안 한 세션은 고른 것(cfg.order = {no, o}), 없으면 데드리프트 먼저.
+    // 보조 종목 X의 j번째 차례가 놓이는 칸: 그 세션에서 자기 하체가 먼저면 짝수 칸, 아니면 홀수 칸.
+    const firstOf = (k) => (S[k] ? S[k].order : 'D');
+    const accSlot = (type, j) => SLOTS * Math.floor(j / 3) + 2 * (j % 3) + (type === firstOf(Math.floor(j / 3)) ? 0 : 1);
+    const pend = cfg.order && cfg.order.o === 'S' ? cfg.order : null;
     const restOf = (s, day) => ({ rested: s.reset ? s.reset.drops : 0, restart: s.reset && s.reset.day === day ? s.reset.R : 0 });
-    function plan(day, snaps) {
+    function plan(day, snaps, o) {
       restMain(day, snaps && snaps.main);
-      const i = S.length - 1, type = slotType(g);
+      const i = S.length - 1, cur = S[i];
+      if (cur.n === 0) cur.order = o || (pend && pend.no === cur.no ? 'S' : 'D');
+      const type = cur.order === 'S' ? slotType(g + 1) : slotType(g);
       const rows = [Object.assign(mainRow(cfg, S[i].presc, type), { avail: 'ok', snap: mainSnap(cfg, S[i]) }, restOf(S[i], day))];
       for (const X of A) {
         if (X.a.day !== type) continue;
@@ -537,7 +545,7 @@ const RoutineLogic = (() => {
         if (sn && at <= g && !s.res.length && !s.snap) { s.snap = sn; s.state = accFromSnap(cfg, X.a, s.state, sn); s.presc = null; p = accP(X, X.i); }
         rows.push(Object.assign(accRow(X.a, p), { avail: at <= g ? 'ok' : 'wait', lag: at < g, accNo: s.no, snap: accSnap(X.a, s.state, p) }, restOf(s, day)));
       }
-      return { g, slot: g, type, no: S[i].no, pos: slotPos(g), main: S[i].presc, rows };
+      return { g, slot: g, type, order: cur.order, no: S[i].no, pos: slotPos(g), main: S[i].presc, rows };
     }
     // 기록한 날은 그때 보여준 무게·횟수·세트·단계를 그대로 보여준다.
     // 예전 기록(Q 없음)의 스쿼트는 데드리프트 ÷ ratio
@@ -633,7 +641,7 @@ const RoutineLogic = (() => {
       const ld = toNum(lg.d);
       for (; d < ld; d++) quiet(d);
       const sn = lg.s || null;
-      const info = plan(ld, sn);
+      const info = plan(ld, sn, lg.o === 'S' ? 'S' : 'D');
       // 고무밴드는 기록한 날 쓴 밴드를 남긴다 (설정에서 밴드를 바꿔도 지난 기록은 그대로).
       if (lg.b) for (const r of info.rows) if (r.band && Array.isArray(lg.b[r.id])) r.bands = lg.b[r.id].slice();
       if (sn) shown(info, sn);

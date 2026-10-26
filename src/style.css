@@ -128,6 +128,7 @@ main.wrap { padding-block: 14px 120px; display: grid; gap: 14px; }
 .meta { font-size: 13px; color: var(--muted); }
 .daybody { border-top: 1px solid var(--line); }
 .dayfoot { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px 14px; }
+.day > .orderpick { margin: 0; padding: 0 14px 12px; }
 .dayfoot .hint { font-size: 13px; color: var(--muted); align-self: center; }
 
 .ex { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -264,6 +265,9 @@ main.wrap { padding-block: 14px 120px; display: grid; gap: 14px; }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button[aria-pressed="true"].y { background: var(--ok); color: #fff; }
 .seg button[aria-pressed="true"].n { background: var(--bad); color: #fff; }
+.orderpick { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; margin: 8px 0; font-size: 13px; color: var(--muted); }
+.seg button[aria-pressed="true"].D { background: var(--dl); color: var(--dl-ink); }
+.seg button[aria-pressed="true"].S { background: var(--sq); color: var(--sq-ink); }
 
 /* ---------- 시작 지점 ---------- */
 .startsum { font-size: 14px; }

@@ -54,6 +54,8 @@
       restFrom: /^\d{4}-\d{2}-\d{2}$/.test(c.restFrom) ? c.restFrom : null,
       from: sanitizeFrom(c.from),
       restSec: sanitizeRest(c.restSec),
+      // 아직 시작하지 않은 세션 no를 스쿼트부터 하기로 골랐으면 {no, o:'S'}
+      order: c.order && c.order.o === 'S' && Number(c.order.no) >= 1 ? { no: Math.floor(Number(c.order.no)), o: 'S' } : null,
       plates: Array.isArray(c.plates) ? [...L.plateCounts(c.plates)].flatMap(([p, n]) => Array(Math.min(n, PAIR_MAX)).fill(p)).sort((a, b) => a - b) : base.plates,
       gear: {
         db: Array.isArray(g.db) ? numList(g.db) : base.gear.db,
@@ -70,6 +72,7 @@
       .map((l) => {
         const o = { d: l.d, res: l.res && typeof l.res === 'object' ? l.res : {} };
         if (l.p) o.p = 1;
+        if (l.o === 'S') o.o = 'S';
         // 그날 계획과 다르게 한 무게
         if (l.w && typeof l.w === 'object') {
           const w = {};
@@ -249,6 +252,11 @@
   const toMode = (m) => josa(modeName(m), '으로', '로');
   const BALANCE_NOTE = '<strong>좌우 균형:</strong> 원판을 더 끼운 쪽은 끝까지 밀어 넣고 바깥으로 움직이지 않게 마구리로 고정하세요. 반대쪽은 원판을 조금 바깥쪽에 둔 채 마구리를 끼우세요.';
   const STEPS = ['', '한', '두'];
+  // 새 세션에서 먼저 할 하체 고르기 (세션 no, 지금 고른 order)
+  function orderPick(no, order) {
+    const b = (v) => `<button type="button" class="${v}" data-act="order" data-no="${no}" data-v="${v}" aria-pressed="${order === v}">${TYPE_NAME[v]} 먼저</button>`;
+    return `<div class="orderpick"><span>세션 ${no} 시작 · 먼저 할 운동</span><div class="seg" role="group" aria-label="세션 ${no}에서 먼저 할 운동">${b('D')}${b('S')}</div></div>`;
+  }
   function flags(row) {
     let f = '';
     if (row.retry) f += '<span class="flag retry">재도전</span>';
@@ -397,8 +405,10 @@
       if (isLog) foot = `<button class="btn ghost" type="button" data-act="edit" data-day="${d}">결과 고치기</button>`;
       else if (L.canLog(m.tl, d)) foot = `<button class="btn" type="button" data-act="log" data-day="${d}">운동 기록하기</button><span class="hint">끝나면 한 종목만 골라도 저장돼요</span>`;
       if (isToday) foot = timerButton() + foot;
+      // 다음 운동이 새 세션의 첫 운동이면 데드리프트·스쿼트 중 먼저 할 것을 고른다.
+      const pick = e.kind === 'plan' && d === m.tl.cursor && e.pos === 0 ? orderPick(e.no, e.order) : '';
       html += `<section class="day${isToday ? ' is-today' : ''}" id="d${d}"><div class="dayhead">${date}<div class="dayinfo"><div class="tagline">${tags}</div><div class="meta">${esc(meta)}</div></div></div>
-        <div class="daybody">${exTable(e.rows, isLog, type)}</div>${foot ? `<div class="dayfoot">${foot}</div>` : ''}</section>`;
+        ${pick}<div class="daybody">${exTable(e.rows, isLog, type)}</div>${foot ? `<div class="dayfoot">${foot}</div>` : ''}</section>`;
     }
     $('days').innerHTML = html;
   }
@@ -986,6 +996,7 @@
     const isLast = sheet.mode === 'edit' && sheet.li === data.logs.length - 1;
     let h = `<div><h2 id="sheetTitle">${longDate(sheet.day)} · ${TYPE_NAME[info.type]}</h2>
       <div class="sub">세션 ${info.no} · ${info.pos + 1}/6 · ${esc(stageText(info.main))}</div></div>
+      ${sheet.mode === 'new' && info.pos === 0 ? orderPick(info.no, info.order) : ''}
       <p class="small">목표 횟수×세트를 모두 채웠으면 성공, 한 세트라도 못 채웠으면 실패예요. <strong>하지 않은 종목은 비워 두세요.</strong> 다음 ${TYPE_NAME[info.type]} 날로 밀려요. 누른 버튼을 한 번 더 누르면 선택이 풀려요.</p>`;
     const restarted = rows.filter((r) => r.restart);
     if (restarted.length) h += `<p class="small note">오래 쉬어서 세션을 처음부터 다시 해요: ${restarted.map((r) => `${esc(r.main ? '데드리프트·스쿼트' : r.name)} ${r.restart}일 쉼 → ${STEPS[r.rested] || r.rested} 단계 낮춤`).join(', ')}</p>`;
@@ -1051,7 +1062,9 @@
       if (cw != null) w[r.id] = cw;
     }
     if (Object.values(w).some((x) => x > 1000)) { toast('무게를 확인해 주세요'); return; }
-    const entry = (d) => Object.assign({ d, res, p: 1 }, Object.keys(bands).length ? { b: bands } : {}, Object.keys(w).length ? { w } : {}, { s });
+    // 스쿼트부터 시작한 세션이면 그 세션 첫 운동 기록에 남긴다 (고치기는 그때 것 그대로).
+    const o = sheet.mode === 'new' ? (info.pos === 0 && info.order === 'S' ? 'S' : null) : data.logs[sheet.li].o;
+    const entry = (d) => Object.assign({ d, res, p: 1 }, o ? { o } : {}, Object.keys(bands).length ? { b: bands } : {}, Object.keys(w).length ? { w } : {}, { s });
     if (sheet.mode === 'new') {
       data.logs.push(entry(L.toStr(sheet.day)));
       const after = L.simulate(data.cfg, data.logs, today, { until: -Infinity });
@@ -1421,7 +1434,7 @@
     h += `<div class="btnrow"><button class="btn ghost" type="button" data-act="addAcc" data-day="D">+ 데드 날 운동</button><button class="btn ghost" type="button" data-act="addAcc" data-day="S">+ 스쿼트 날 운동</button></div></div>`;
 
     h += `<div class="card"><h2>규칙</h2><ul class="rules">
-      <li>한 세션은 운동 6회(데드리프트 날 → 스쿼트 날 번갈아 3회씩). 6번째 운동을 마친 다음 날 하루 쉬어요. 고정으로 쉬는 요일은 없어요.</li>
+      <li>한 세션은 운동 6회(데드리프트 날 → 스쿼트 날 번갈아 3회씩). 새 세션의 첫 운동 날에는 스쿼트를 먼저 하도록 고를 수 있어요(스쿼트 → 데드리프트 번갈아). 6번째 운동을 마친 다음 날 하루 쉬어요. 고정으로 쉬는 요일은 없어요.</li>
       <li>기록하지 않고 지나간 날은 쉰 날로 보고, 그날 운동을 다음 날로 미뤄요. 운동하고 깜빡했다면 그날을 눌러 나중에 기록할 수 있어요.</li>
       <li>기록할 때 한 종목만 골라도 저장돼요. 고르지 않은 종목은 안 한 것으로 보고 다음 같은 날(데드 날·스쿼트 날)로 밀려요. 하체를 안 했으면 다음 날도 같은 하체 날이에요.</li>
       <li>상체·팔은 자기 하체 날에만 하고 하체보다 앞서 가지 않아요. 밀린 종목은 지난 세션 몫부터 차례로 하고, 하체를 따라가느라 쉬는 날은 휴식으로 봐요.</li>
@@ -1736,6 +1749,12 @@
     else if (act.startsWith('t') && /^t(Start|Skip|Undo|Reset|Edit|Save)$/.test(act)) timerAct(act, b.dataset.id);
     else if (act === 'chartMode') { chartMode = b.dataset.v === 'each' ? 'each' : 'all'; renderChart(); }
     else if (act === 'chartToggle') { const k = b.dataset.key; if (chartOff.has(k)) chartOff.delete(k); else chartOff.add(k); renderChart(); }
+    else if (act === 'order') {
+      const no = Number(b.dataset.no), v = b.dataset.v === 'S' ? 'S' : 'D';
+      data.cfg.order = v === 'S' ? { no, o: 'S' } : null;
+      save(`세션 ${no} · ${TYPE_NAME[v]}부터 해요`);
+      if (sheet && sheet.kind === 'log') renderSheet(model(weekMon + 6));
+    }
     else if (act === 'lwOpen') { sheet.ew.add(b.dataset.id); renderSheet(model(weekMon + 6)); const el = $('lw-' + b.dataset.id); if (el) { el.focus(); el.select(); } }
     else if (act === 'lwReset') { delete sheet.w[b.dataset.id]; sheet.ew.delete(b.dataset.id); renderSheet(model(weekMon + 6)); }
     else if (act === 'askDel') { sheet.confirmDel = true; renderSheet(model(weekMon + 6)); }
