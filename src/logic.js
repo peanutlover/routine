@@ -74,7 +74,7 @@ const RoutineLogic = (() => {
       from: { no: 1, k: 0, stage: 1, acc: {} },
       plates: [1.25],
       gear: defaultGear(),
-      main: { dl: 40, ratio: 1.2, pct: 5, prog: 'r', reps: 5, ladder: [3, 4, 5], sets: 3, rest: '5~8분' },
+      main: { dl: 40, ratio: 1.2, pct: 5, kg: 5, inc: { dl: 'pct', sq: 'pct' }, ichg: [], prog: 'r', reps: 5, ladder: [3, 4, 5], sets: 3, rest: '5~8분' },
       acc: CATALOG.map(accDefaults),
     };
   }
@@ -150,6 +150,35 @@ const RoutineLogic = (() => {
   // 보조 종목 사다리의 마지막 칸 번호: 횟수 고정은 무게 3단계, 무게 고정은 횟수 단계 수.
   const accTop = (a) => (a.prog === 'r' ? ACC_TOP : ladderOf(a).length - 1);
 
+  // ---------- 하체 증량 방식 ----------
+  // 데드리프트·스쿼트마다 'pct'(main.pct% 씩) 또는 'kg'(main.kg kg 씩). main.inc가 처음 방식이고,
+  // ichg = 기록 중에 바꾼 내역 [{no, id, inc}]: 세션 no부터 새 방식 (그 앞 세션의 무게에서 새 방식으로 오르내린다).
+  const LIFTS = ['dl', 'sq'];
+  function mainInc(cfg, id, no) {
+    let v = cfg.main.inc && cfg.main.inc[id] === 'kg' ? 'kg' : 'pct';
+    for (const c of cfg.main.ichg || []) if (c.id === id && c.no <= no) v = c.inc === 'kg' ? 'kg' : 'pct';
+    return v;
+  }
+  // 기준점 an(level l에서 무게 w, 증량 방식 i)에서 level까지 오르내린 무게
+  const liftW = (cfg, an, level) => (an.i === 'kg'
+    ? Math.max(1, an.w + (cfg.main.kg > 0 ? cfg.main.kg : 5) * (level - an.l))
+    : an.w * Math.pow(1 + cfg.main.pct / 100, level - an.l));
+  // 시작 지점(level 0)의 기준점: 데드리프트 시작 무게, 스쿼트 = 데드리프트 ÷ ratio
+  const mainAnchors = (cfg, no) => ({
+    dl: { l: 0, w: cfg.main.dl, i: mainInc(cfg, 'dl', no) },
+    sq: { l: 0, w: cfg.main.dl / cfg.main.ratio, i: mainInc(cfg, 'sq', no) },
+  });
+  // 세션 no로 넘어갈 때 그 세션부터 증량 방식이 바뀌면, 방금 한 세션(st)의 무게를 기준점으로 잡는다.
+  function rebaseMain(cfg, st, no) {
+    const an = st.an || mainAnchors(cfg, 1);
+    const out = Object.assign({}, an);
+    for (const id of LIFTS) {
+      const i = mainInc(cfg, id, no);
+      if (i !== an[id].i) out[id] = { l: st.level, w: liftW(cfg, an[id], st.level), i };
+    }
+    return out;
+  }
+
   // ---------- 상태 머신 ----------
   // main.level: 데드리프트 = 시작무게 × 1.05^level.
   //   횟수 고정(prog r): 묶음 = level start..start+3, 4번째(최고 중량)가 "4단계". 무게 고정(prog w): step = 횟수 단계, 끝을 성공하면 level+1.
@@ -191,12 +220,12 @@ const RoutineLogic = (() => {
     const top = mainTop(cfg);
     const stage = Math.min(sp.stage, top);
     const bundle = Math.max(1, Math.floor((sp.no - stage) / top) + 1);
-    return { main: { level: 0, start: 1 - stage, step: stage - 1, bundle, fail: false }, acc };
+    return { main: { level: 0, start: 1 - stage, step: stage - 1, bundle, fail: false, an: mainAnchors(cfg, sp.no) }, acc };
   }
 
   function mainPresc(cfg, m) {
-    const dl = cfg.main.dl * Math.pow(1 + cfg.main.pct / 100, m.level);
-    const base = { dl, sq: dl / cfg.main.ratio, level: m.level, bundle: m.bundle, retry: m.fail };
+    const an = m.an || mainAnchors(cfg, 1);
+    const base = { dl: liftW(cfg, an.dl, m.level), sq: liftW(cfg, an.sq, m.level), level: m.level, bundle: m.bundle, retry: m.fail };
     if (cfg.main.prog === 'w') {
       const n = ladderOf(cfg.main).length;
       return Object.assign(base, { stage: m.step + 1, top: n >= 3 && m.step === n - 1, reps: ladderReps(cfg.main, m.step) });
@@ -249,10 +278,10 @@ const RoutineLogic = (() => {
     if (!same) s.step = Math.max(-9, s.step - 1);
     return s;
   }
-  // 하체 한 세션의 결과로 다음 상태. bundleDone = 묶음을 마침.
-  function advanceMain(cfg, st, ok) {
-    if (!ok) return { m: Object.assign(lowerMain(cfg, st), { fail: true }), bundleDone: false };
-    const m = Object.assign({}, st, { fail: false });
+  // 하체 한 세션의 결과로 다음 상태(다음 세션 no). bundleDone = 묶음을 마침.
+  function advanceMain(cfg, st, ok, no) {
+    if (!ok) return { m: Object.assign(lowerMain(cfg, st), { fail: true, an: rebaseMain(cfg, st, no) }), bundleDone: false };
+    const m = Object.assign({}, st, { fail: false, an: rebaseMain(cfg, st, no) });
     let bundleDone = false;
     if (cfg.main.prog === 'w') {
       if (m.step >= ladderOf(cfg.main).length - 1) { m.level += 1; m.step = 0; m.bundle += 1; bundleDone = true; } else m.step += 1;
@@ -270,8 +299,8 @@ const RoutineLogic = (() => {
     else { s.w = stepW(cfg, a, s.mode, s.w, 1); s.n += 1; s.step = 0; }
     return s;
   }
-  function advance(cfg, st, out) {
-    const { m } = advanceMain(cfg, st.main, out.main);
+  function advance(cfg, st, out, no) {
+    const { m } = advanceMain(cfg, st.main, out.main, no);
     const acc = {};
     for (const a of cfg.acc) acc[a.id] = st.acc[a.id] && advanceAcc(cfg, a, st.acc[a.id], out.acc[a.id]);
     return { main: m, acc };
@@ -293,7 +322,7 @@ const RoutineLogic = (() => {
     if (!(no >= sp.no)) return null;
     let st = initState(cfg);
     for (let n = sp.no; n < no; n++) {
-      st = advance(cfg, st, evaluate(cfg, prescribe(cfg, st, n), ALL_OK));
+      st = advance(cfg, st, evaluate(cfg, prescribe(cfg, st, n), ALL_OK), n + 1);
       for (const a of cfg.acc) st.acc[a.id] = openState(a, st.acc[a.id], n + 1);
     }
     return { state: st, presc: prescribe(cfg, st, no) };
@@ -331,14 +360,14 @@ const RoutineLogic = (() => {
 
   // ---------- 기록 고정 ----------
   // 기록마다 그날의 상태·처방을 s에 남긴다: { main: 하체 세션 상태, 종목id: 그 종목 세션 상태 } (상체·팔은 그날 한 종목만).
-  //   하체 {l level, s start, t step, b bundle, f 재도전, top 상체·팔이 쉬는 세션, k 진행 방식, W 데드리프트 무게, r 횟수, e 세트}
+  //   하체 {l level, s start, t step, b bundle, f 재도전, top 상체·팔이 쉬는 세션, k 진행 방식, W 데드리프트 무게, Q 스쿼트 무게, r 횟수, e 세트}
   //   종목 {m 훈련방식, w 기준 무게, t step, n 증량 횟수, k 진행 방식, W 든 무게, r 횟수, e 세트, f 재도전, 무게 생략이면 i·v 증량 방식·값}
   // 다시 계산할 때 세션마다 첫 기록에 남은 상태로 맞추고, 기록한 날은 그때 무게·횟수·세트를 그대로 보여준다.
   // 그래서 진행 방식·횟수 단계·장비 무게·증량 값·횟수·세트를 바꿔도 지난 기록은 그대로이고, 그다음부터 지금 설정으로 계산한다.
   const r4 = (x) => (x == null ? null : Math.round(x * 1e4) / 1e4);
   function mainSnap(cfg, ms) {
     const m = ms.state, p = ms.presc;
-    return { l: m.level, s: m.start, t: m.step, b: m.bundle, f: m.fail ? 1 : 0, top: p.top ? 1 : 0, k: cfg.main.prog, W: r4(p.dl), r: p.reps, e: cfg.main.sets };
+    return { l: m.level, s: m.start, t: m.step, b: m.bundle, f: m.fail ? 1 : 0, top: p.top ? 1 : 0, k: cfg.main.prog, W: r4(p.dl), Q: r4(p.sq), r: p.reps, e: cfg.main.sets };
   }
   function accSnap(a, st, p) {
     const o = { m: st.mode, w: r4(st.w), t: st.step, n: st.n, k: a.prog, W: r4(p.w), r: p.reps, e: a.sets, f: st.fail ? 1 : 0 };
@@ -407,7 +436,7 @@ const RoutineLogic = (() => {
       const cur = S[S.length - 1];
       if (!sn || cur.snap || cur.res.length) return;
       cur.snap = sn;
-      cur.state = mainFromSnap(cfg, sn);
+      cur.state = Object.assign(mainFromSnap(cfg, sn), { an: cur.state.an });
       cur.presc = Object.assign(mainPresc(cfg, cur.state), { top: !!sn.top });
     };
     const mainSnapOf = (li) => (logs[li] && logs[li].s && logs[li].s.main) || null;
@@ -502,15 +531,16 @@ const RoutineLogic = (() => {
       return { g, slot: g, type, no: S[i].no, pos: slotPos(g), main: S[i].presc, rows };
     }
     // 기록한 날은 그때 보여준 무게·횟수·세트·단계를 그대로 보여준다.
-    const snapMain = (p, m) => Object.assign({}, p, { dl: m.W, sq: m.W / cfg.main.ratio, reps: m.r, bundle: m.b, retry: !!m.f,
+    // 예전 기록(Q 없음)의 스쿼트는 데드리프트 ÷ ratio
+    const sqOf = (m) => (m.Q != null ? m.Q : m.W / cfg.main.ratio);
+    const snapMain = (p, m) => Object.assign({}, p, { dl: m.W, sq: sqOf(m), reps: m.r, bundle: m.b, retry: !!m.f,
       stage: m.k === 'w' ? m.t + 1 : m.l - m.s + 1 });
     function shown(info, sn) {
-      const ratio = cfg.main.ratio;
       if (sn.main && sn.main.W != null) info.main = snapMain(info.main, sn.main);
       for (const r of info.rows) {
         const x = r.main ? sn.main : sn[r.id];
         if (!x || r.avail !== 'ok') continue;
-        if (!r.main) { r.w = x.W; r.mode = x.m; if (x.i) { r.inc = x.i; r.incV = x.v; } } else if (x.W != null) r.w = r.id === 'dl' ? x.W : x.W / ratio;
+        if (!r.main) { r.w = x.W; r.mode = x.m; if (x.i) { r.inc = x.i; r.incV = x.v; } } else if (x.W != null) r.w = r.id === 'dl' ? x.W : sqOf(x);
         r.reps = x.r; r.sets = x.e;
       }
     }
@@ -542,7 +572,7 @@ const RoutineLogic = (() => {
         if (cur.n === SLOTS) {
           cur.done = true;
           cur.out = !cur.res.includes(false);
-          const nx = advanceMain(cfg, cur.state, cur.out);
+          const nx = advanceMain(cfg, cur.state, cur.out, cur.no + 1);
           cur.bundleDone = nx.bundleDone;
           cur.restSkip = cur.rests >= REST_SKIP;
           openMain(cur.i + 1, nx.m);
@@ -832,7 +862,7 @@ const RoutineLogic = (() => {
 
   return {
     SLOTS, MAIN_STAGES, ACC_TOP, GAP1, GAP2, PLATE_OPTIONS, MODES, MODE_KEYS, CATALOG, EXTRA, toNum, toStr, weekday, mondayOf, localToday,
-    defaultConfig, defaultGear, accDefaults, migrate, startPoint, accAt, accTop, mainTop, restStage, segAt, initState, prescribe, evaluate, advance,
+    defaultConfig, defaultGear, accDefaults, migrate, mainInc, LIFTS, startPoint, accAt, accTop, mainTop, restStage, segAt, initState, prescribe, evaluate, advance,
     replay, projectTo, simulate, timeline, snapLogs, snapOf, canLog, slotType, slotNo, slotPos, REST_SKIP,
     stepW, gearList, ladderOf, ladderReps, dayRows, roundW, fmtW, plateCounts, plateMath, plateText, stackMath, stackText, chainText, loadInfo,
   };
