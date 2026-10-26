@@ -1,5 +1,5 @@
 // 오프라인 캐시: 앱 파일은 네트워크 우선(새 버전 즉시 반영), 글꼴은 캐시 우선.
-const CACHE = 'routine5-v19';
+const CACHE = 'routine5-v20';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -25,7 +25,8 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin === self.location.origin) {
-    e.respondWith(fetch(req).then((res) => put(req, res)).catch(() =>
+    // GitHub Pages는 브라우저가 10분 동안 캐시해도 된다고 보내므로, 앱 파일은 늘 서버에 새 버전이 있는지 물어본다.
+    e.respondWith(fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }).then((res) => put(req, res)).catch(() =>
       caches.match(req).then((hit) => hit || (req.mode === 'navigate' ? caches.match('./index.html') : Response.error()))));
   } else if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
     e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => put(req, res))));
