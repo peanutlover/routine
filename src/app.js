@@ -1290,7 +1290,7 @@
         : '<span class="small">설정 → 장비에서 밴드를 추가해 주세요</span>'}</div></div>`;
     } else {
       h += `<div class="row2">${wField(id('w'), x.mode, x.w, opt.wLabel || '시작 무게', 'data-f="w"')}${x.mode === 'stack'
-        ? `<label class="field"><span>무게추 단계 (kg, 쉼표로)</span><input type="text" inputmode="decimal" id="${esc(id('stack'))}" data-f="stack" value="${esc(x.stack.join(', '))}" placeholder="예: 20, 23, 26, 29"></label>` : ''}</div>`;
+        ? `<label class="field"><span>무게추 단계 (kg, 쉼표나 띄어쓰기로)</span><input type="text" id="${esc(id('stack'))}" data-f="stack" value="${esc(x.stack.join(', '))}" placeholder="예: 20, 23, 26, 29"></label>` : ''}</div>`;
       if (x.mode === 'stack' && !x.stack.length) h += '<p class="small">머신에 달린 무게추 무게를 차례로 넣어 주세요. 비워 두면 5kg 간격으로 보고 계산해요.</p>';
     }
     const sets = `<label class="field"><span>세트</span><input type="number" inputmode="numeric" min="1" id="${esc(id('sets'))}" data-f="sets" value="${x.sets}"></label>`;
@@ -1299,7 +1299,7 @@
     if (x.mode === 'band') h += `<div class="row3">${reps}${sets}${rest}</div>`;
     else {
       h += `<div class="row2"><label class="field"><span>진행 방식</span><select id="${esc(id('prog'))}" data-f="prog"><option value="w" ${x.prog !== 'r' ? 'selected' : ''}>무게 고정</option><option value="r" ${x.prog === 'r' ? 'selected' : ''}>횟수 고정</option></select></label>
-        ${x.prog === 'r' ? reps : `<label class="field"><span>횟수 단계 (쉼표로)</span><input type="text" inputmode="numeric" id="${esc(id('ladder'))}" data-f="ladder" value="${esc(L.ladderOf(x).join(', '))}" placeholder="예: 3, 4, 5"></label>`}</div>
+        ${x.prog === 'r' ? reps : `<label class="field"><span>횟수 단계 (쉼표나 띄어쓰기로)</span><input type="text" id="${esc(id('ladder'))}" data-f="ladder" value="${esc(L.ladderOf(x).join(', '))}" placeholder="예: 3, 4, 5"></label>`}</div>
         <div class="row2 pair"><div class="row2">${sets}${rest}</div>${cont ? `<div class="row2"><label class="field"><span>증량 방식</span><select id="${esc(id('inc'))}" data-f="inc"><option value="pct" ${x.inc === 'pct' ? 'selected' : ''}>%</option><option value="kg" ${x.inc === 'kg' ? 'selected' : ''}>kg</option></select></label>
           <label class="field"><span>증량 값</span><input type="number" inputmode="decimal" step="0.5" min="0" id="${esc(id('incv'))}" data-f="incV" value="${x.incV}"></label></div>` : ''}</div>`;
     }
@@ -1341,7 +1341,7 @@
       <p class="small">바벨·머신 종목에는 5kg 단위 무게와 나머지를 채울 경량원판을 함께 보여줘요. 목표 무게 이상이 되는 가장 가벼운 조합을 고르고, 바벨은 그다음으로 좌우가 고른 조합을 골라요.</p></div>`;
 
     const g = cfg.gear;
-    const gearRow = (k, label) => `<label class="field"><span>${label} (kg, 쉼표로 구분)</span><input type="text" inputmode="decimal" id="set-gear-${k}" data-k="gear.${k}" value="${esc(g[k].join(', '))}"></label>`;
+    const gearRow = (k, label) => `<label class="field"><span>${label} (kg, 쉼표나 띄어쓰기로)</span><input type="text" id="set-gear-${k}" data-k="gear.${k}" value="${esc(g[k].join(', '))}"></label>`;
     h += `<div class="card"><h2>장비</h2>
       <p class="small">헬스장마다 다른 무게를 넣어 주세요. 덤벨·일체형 바벨·원판 한 장 종목은 이 무게들 안에서 다음 무게로 올라가요(원판을 더 끼울 수 없으니까요). 머신 무게추는 종목마다 따로 넣어요.</p>
       ${gearRow('db', '덤벨')}${gearRow('bars', '일체형 바벨')}${gearRow('one', '한 장으로 드는 원판')}
@@ -1360,7 +1360,7 @@
       <label class="field"><span>스쿼트 ${wl} (kg)</span><input type="number" inputmode="decimal" step="0.1" min="1" id="set-sq" data-k="main.sq" value="${mm.sq > 0 ? mm.sq : ''}"></label></div>
       <p class="small" id="sqDerived"></p>
       <div class="row2"><label class="field"><span>진행 방식</span><select id="set-mprog" data-k="main.prog"><option value="r" ${mm.prog !== 'w' ? 'selected' : ''}>횟수 고정</option><option value="w" ${mm.prog === 'w' ? 'selected' : ''}>무게 고정</option></select></label>
-      ${mm.prog === 'w' ? `<label class="field"><span>횟수 단계 (쉼표로)</span><input type="text" inputmode="numeric" id="set-mladder" data-k="main.ladder" value="${esc(L.ladderOf(mm).join(', '))}"></label>`
+      ${mm.prog === 'w' ? `<label class="field"><span>횟수 단계 (쉼표나 띄어쓰기로)</span><input type="text" id="set-mladder" data-k="main.ladder" value="${esc(L.ladderOf(mm).join(', '))}"></label>`
         : `<label class="field"><span>횟수</span><input type="number" inputmode="numeric" min="1" id="set-mreps" data-k="main.reps" value="${mm.reps}"></label>`}</div>
       <div class="row2"><label class="field"><span>세트</span><input type="number" inputmode="numeric" min="1" id="set-msets" data-k="main.sets" value="${mm.sets}"></label>
       <label class="field"><span>휴식</span><input type="text" id="set-mrest" data-k="main.rest" value="${esc(mm.rest)}"></label></div>
@@ -1490,7 +1490,7 @@
     else if (f === 'prog') { a.prog = v === 'r' ? 'r' : 'w'; redraw = true; }
     else if (f === 'ladder') {
       const l = numList(v, { int: true, sorted: false, max: 12 });
-      if (!l.length) return back('횟수를 쉼표로 나눠 넣어 주세요 (예: 3, 4, 5)', L.ladderOf(a).join(', '));
+      if (!l.length) return back('횟수를 쉼표나 띄어쓰기로 나눠 넣어 주세요 (예: 3 4 5)', L.ladderOf(a).join(', '));
       a.ladder = l; el.value = l.join(', ');
     } else if (f === 'reps' || f === 'sets') {
       const n = Math.round(Number(v));
@@ -1533,7 +1533,7 @@
     } else if (k.startsWith('gear.')) {
       const g = k.slice(5);
       const l = numList(el.value);
-      if (!l.length) { el.value = cfg.gear[g].join(', '); toast('무게를 하나 이상 쉼표로 나눠 넣어 주세요'); return; }
+      if (!l.length) { el.value = cfg.gear[g].join(', '); toast('무게를 하나 이상 쉼표나 띄어쓰기로 나눠 넣어 주세요'); return; }
       cfg.gear[g] = l;
       el.value = l.join(', ');
       save();
@@ -1567,7 +1567,7 @@
       }
       else if (f === 'ladder') {
         const l = numList(el.value, { int: true, sorted: false, max: 12 });
-        if (!l.length) { el.value = L.ladderOf(cfg.main).join(', '); toast('횟수를 쉼표로 나눠 넣어 주세요 (예: 3, 4, 5)'); return; }
+        if (!l.length) { el.value = L.ladderOf(cfg.main).join(', '); toast('횟수를 쉼표나 띄어쓰기로 나눠 넣어 주세요 (예: 3 4 5)'); return; }
         cfg.main.ladder = l; el.value = l.join(', ');
         save(); renderSettings(); return;
       } else {
