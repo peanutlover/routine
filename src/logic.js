@@ -74,7 +74,7 @@ const RoutineLogic = (() => {
       from: { no: 1, k: 0, stage: 1, acc: {} },
       plates: [1.25],
       gear: defaultGear(),
-      main: { dl: 40, ratio: 1.2, pct: 5, kg: 5, inc: { dl: 'pct', sq: 'pct' }, ichg: [], prog: 'r', reps: 5, ladder: [3, 4, 5], sets: 3, rest: '5~8분' },
+      main: { dl: 40, ratio: 1.2, pct: 5, inc: { dl: 'pct', sq: 'pct' }, ichg: [], prog: 'r', reps: 5, ladder: [3, 4, 5], sets: 3, rest: '5~8분' },
       acc: CATALOG.map(accDefaults),
     };
   }
@@ -151,17 +151,20 @@ const RoutineLogic = (() => {
   const accTop = (a) => (a.prog === 'r' ? ACC_TOP : ladderOf(a).length - 1);
 
   // ---------- 하체 증량 방식 ----------
-  // 데드리프트·스쿼트마다 'pct'(main.pct% 씩) 또는 'kg'(main.kg kg 씩). main.inc가 처음 방식이고,
+  // 데드리프트·스쿼트마다 'pct'(main.pct% 씩) 또는 kg 숫자(그만큼씩, 고를 수 있는 값은 MAIN_KG). main.inc가 처음 방식이고,
   // ichg = 기록 중에 바꾼 내역 [{no, id, inc}]: 세션 no부터 새 방식 (그 앞 세션의 무게에서 새 방식으로 오르내린다).
   const LIFTS = ['dl', 'sq'];
+  const MAIN_KG = [5, 6];
+  // 'pct' 또는 kg 숫자로. 예전 판의 'kg'는 main.kg(없으면 5kg).
+  const incOf = (cfg, v) => (v === 'kg' ? (cfg.main.kg > 0 ? cfg.main.kg : 5) : Number(v) > 0 ? Number(v) : 'pct');
   function mainInc(cfg, id, no) {
-    let v = cfg.main.inc && cfg.main.inc[id] === 'kg' ? 'kg' : 'pct';
-    for (const c of cfg.main.ichg || []) if (c.id === id && c.no <= no) v = c.inc === 'kg' ? 'kg' : 'pct';
+    let v = incOf(cfg, cfg.main.inc && cfg.main.inc[id]);
+    for (const c of cfg.main.ichg || []) if (c.id === id && c.no <= no) v = incOf(cfg, c.inc);
     return v;
   }
   // 기준점 an(level l에서 무게 w, 증량 방식 i)에서 level까지 오르내린 무게
-  const liftW = (cfg, an, level) => (an.i === 'kg'
-    ? Math.max(1, an.w + (cfg.main.kg > 0 ? cfg.main.kg : 5) * (level - an.l))
+  const liftW = (cfg, an, level) => (an.i !== 'pct'
+    ? Math.max(1, an.w + an.i * (level - an.l))
     : an.w * Math.pow(1 + cfg.main.pct / 100, level - an.l));
   // 시작 지점(level 0)의 기준점: 데드리프트 시작 무게, 스쿼트 = 데드리프트 ÷ ratio
   const mainAnchors = (cfg, no) => ({
@@ -862,7 +865,7 @@ const RoutineLogic = (() => {
 
   return {
     SLOTS, MAIN_STAGES, ACC_TOP, GAP1, GAP2, PLATE_OPTIONS, MODES, MODE_KEYS, CATALOG, EXTRA, toNum, toStr, weekday, mondayOf, localToday,
-    defaultConfig, defaultGear, accDefaults, migrate, mainInc, LIFTS, startPoint, accAt, accTop, mainTop, restStage, segAt, initState, prescribe, evaluate, advance,
+    defaultConfig, defaultGear, accDefaults, migrate, mainInc, LIFTS, MAIN_KG, startPoint, accAt, accTop, mainTop, restStage, segAt, initState, prescribe, evaluate, advance,
     replay, projectTo, simulate, timeline, snapLogs, snapOf, canLog, slotType, slotNo, slotPos, REST_SKIP,
     stepW, gearList, ladderOf, ladderReps, dayRows, roundW, fmtW, plateCounts, plateMath, plateText, stackMath, stackText, chainText, loadInfo,
   };

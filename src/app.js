@@ -107,10 +107,13 @@
   // 하체 증량 방식: 데드리프트·스쿼트마다 % 또는 kg, 기록 중에 바꾼 내역 ichg [{no, id, inc}]
   function sanitizeMain(m) {
     const inc = m.inc && typeof m.inc === 'object' ? m.inc : {};
-    m.inc = { dl: inc.dl === 'kg' ? 'kg' : 'pct', sq: inc.sq === 'kg' ? 'kg' : 'pct' };
-    m.kg = Number(m.kg) > 0 ? Number(m.kg) : 5;
+    // 'pct' 또는 kg 숫자 (예전 판의 'kg'는 그때 kg 값으로)
+    const kg = Number(m.kg) > 0 ? Number(m.kg) : 5;
+    const one = (v) => (v === 'kg' ? kg : Number(v) > 0 && Number(v) <= 50 ? Number(v) : 'pct');
+    m.inc = { dl: one(inc.dl), sq: one(inc.sq) };
+    delete m.kg;
     m.ichg = Array.isArray(m.ichg) ? m.ichg.filter((x) => x && Number(x.no) >= 1 && L.LIFTS.includes(x.id))
-      .map((x) => ({ no: Math.floor(Number(x.no)), id: x.id, inc: x.inc === 'kg' ? 'kg' : 'pct' })).sort((p, q) => p.no - q.no) : [];
+      .map((x) => ({ no: Math.floor(Number(x.no)), id: x.id, inc: one(x.inc) })).sort((p, q) => p.no - q.no) : [];
     return m;
   }
   // 진행 방식: r 횟수 고정 · w 무게 고정(횟수 단계 ladder)
@@ -1242,7 +1245,7 @@
   const changeNo = (a) => exNow(a).no;
   // 하체 증량 방식을 바꾸면 적용할 세션: 진행 중인 하체 세션이 있으면 그다음 세션, 아직 시작 전이면 그 세션.
   function mainChangeNo(sim = logSim()) { return sim.cur.no + (sim.cur.n > 0 ? 1 : 0); }
-  const incName = (i) => (i === 'kg' ? `${data.cfg.main.kg}kg` : `${data.cfg.main.pct}%`);
+  const incName = (i) => (i === 'pct' ? `${data.cfg.main.pct}%` : `${i}kg`);
   // 하체 증량 방식 바꾸기. 기록이 없으면 처음부터, 있으면 mainChangeNo 세션부터. 적용할 세션 번호(처음부터면 null).
   function setMainInc(id, v) {
     const m = data.cfg.main;
@@ -1335,7 +1338,7 @@
     const mm = cfg.main;
     const LIFT_NAME = { dl: '데드리프트', sq: '스쿼트' };
     const incOf = (id) => L.mainInc(cfg, id, Infinity);
-    const incSel = (id) => `<label class="field"><span>${LIFT_NAME[id]} 증량</span><select id="set-minc-${id}" data-k="main.inc.${id}">${['pct', 'kg'].map((i) => `<option value="${i}" ${incOf(id) === i ? 'selected' : ''}>${incName(i)}씩</option>`).join('')}</select></label>`;
+    const incSel = (id) => `<label class="field"><span>${LIFT_NAME[id]} 증량</span><select id="set-minc-${id}" data-k="main.inc.${id}">${['pct', ...new Set([...L.MAIN_KG, incOf(id)].filter((i) => i !== 'pct'))].map((i) => `<option value="${i}" ${incOf(id) === i ? 'selected' : ''}>${incName(i)}씩</option>`).join('')}</select></label>`;
     const ups = L.LIFTS.map((id) => incName(incOf(id)));
     const upTxt = ups[0] === ups[1] ? ups[0] : `데드리프트 ${ups[0]}·스쿼트 ${ups[1]}`;
     const incNote = sim ? `증량 방식을 바꾸면 진행 중인 세션은 그대로 하고 세션 ${mainChangeNo(sim)}부터 새 방식으로 올라가요.` : '';
@@ -1380,7 +1383,7 @@
       <li>휴식일에도 운동했다면 기록할 수 있고, 기록하면 운동한 날로 계산해요.</li>
       <li>이미 하던 루틴이면 시작 지점을 그 세션·순서·무게로 옮기고, 그 뒤 지난 날들을 날짜순으로 기록해 이어가요.</li>
       <li>데드리프트 = 스쿼트 × 1.2. 둘은 한 묶음으로 같이 오르내려요. 하체를 하나라도 실패하면 다음 세션은 한 단계 낮춰 다시 해요.</li>
-      <li>데드리프트·스쿼트는 종목마다 5%씩 또는 5kg씩 올릴 수 있어요. 세션 중에 바꾸면 그 세션은 그대로 하고, 다음 세션부터 앞 세션 무게에서 새 방식으로 오르내려요. 바벨·머신 보조 종목도 종목마다 %·kg을 골라요(진행 중인 세션 무게는 그대로).</li>
+      <li>데드리프트·스쿼트는 종목마다 5%씩, 5kg씩 또는 6kg씩 올릴 수 있어요. 세션 중에 바꾸면 그 세션은 그대로 하고, 다음 세션부터 앞 세션 무게에서 새 방식으로 오르내려요. 바벨·머신 보조 종목도 종목마다 %·kg을 골라요(진행 중인 세션 무게는 그대로).</li>
       <li>무게 고정 종목은 세션마다 다음 횟수로, 횟수 고정 종목은 세션마다 한 칸 무거운 무게로 가요. 실패하면 한 단계 낮춰 다시 하고, 사다리 끝을 성공하면 다음 세션에 증량해요. 하체가 마지막 단계인 세션(횟수 고정은 4단계)은 상체·팔이 쉬어요.</li>
       <li>바벨·머신·원판 여러 장은 %·kg으로 올리고 원판·무게추 조합을 알려줘요. 덤벨·일체형 바벨·원판 한 장은 가진 무게 중 다음 무게로 올라가요. 고무밴드는 증량 없이 기록만 해요.</li>
       <li>진행 방식·횟수·세트·장비 무게 같은 설정을 중간에 바꿔도 이미 한 기록은 그대로 두고, 지금 무게와 성공·실패에서 바뀐 설정으로 다음을 계산해요.</li>
@@ -1538,7 +1541,7 @@
       if (f === 'rest') cfg.main.rest = el.value.trim();
       else if (f === 'prog') { cfg.main.prog = el.value === 'w' ? 'w' : 'r'; save(); renderSettings(); return; }
       else if (f.startsWith('inc.')) {
-        const id = f.slice(4), v = el.value === 'kg' ? 'kg' : 'pct';
+        const id = f.slice(4), v = Number(el.value) > 0 ? Number(el.value) : 'pct';
         const no = setMainInc(id, v);
         save(`${id === 'dl' ? '데드리프트' : '스쿼트'}는 ${no ? `세션 ${no}부터 ` : ''}${incName(v)}씩 올려요`);
         renderSettings();

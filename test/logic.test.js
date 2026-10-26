@@ -682,7 +682,7 @@ const mainBy = (c, logs, until) => {
 test('하체 증량 방식: 스쿼트만 5kg씩, 데드리프트는 5%씩. 실패하면 5kg 낮춘다', () => {
   const c = cfg();
   c.main.dl = 102; c.acc = [];
-  c.main.inc.sq = 'kg';
+  c.main.inc.sq = 5;
   const w = mainBy(c, [], L.toNum(TODAY) + 60).slice(0, 6);
   assert.deepEqual(w.map((x) => x[1]), [85, 90, 95, 100, 90, 95]);
   assert.deepEqual(w.map((x) => x[0]), [102, 107.1, 112.5, 118.1, 107.1, 112.5]);
@@ -696,7 +696,7 @@ test('하체 증량 방식: 세션 중에 바꾸면 그 세션은 그대로, 다
   c.main.dl = 102; c.acc = [];
   const logs = logDaily(c, [], 8);                 // 세션 1(6회) + 세션 2 두 번 (85, 89.25)
   const before = loggedRows(c, logs, 'sq');
-  c.main.ichg.push({ no: 3, id: 'sq', inc: 'kg' });
+  c.main.ichg.push({ no: 3, id: 'sq', inc: 5 });
   assert.deepEqual(loggedRows(c, logs, 'sq'), before);
   const sim = L.simulate(c, logs, null, { until: L.toNum(TODAY) + 40 });
   assert.equal(r1(sim.next.main.sq), 89.3);       // 진행 중인 세션 2는 그대로
@@ -719,4 +719,13 @@ test('보조 종목 증량 방식(% → kg)을 세션 중에 바꾸면 그 세�
   bench.inc = 'kg'; bench.incV = 5;
   const sim = L.simulate(c, logs, null, { until: L.toNum(TODAY) + 30 });
   assert.deepEqual([1, 2, 3].map((no) => r1(sim.acc.bench[no - 1].presc.w)), [40, 42, 47]);
+});
+
+test('하체 증량 방식: 6kg씩, 예전 판의 kg는 5kg로 읽는다', () => {
+  const c = cfg();
+  c.main.dl = 102; c.acc = [];
+  c.main.inc.dl = 6;
+  assert.deepEqual(mainBy(c, [], L.toNum(TODAY) + 40).slice(0, 5).map((x) => x[0]), [102, 108, 114, 120, 108]);
+  c.main.inc.sq = 'kg';
+  assert.deepEqual(mainBy(c, [], L.toNum(TODAY) + 40).slice(0, 3).map((x) => x[1]), [85, 90, 95]);
 });
