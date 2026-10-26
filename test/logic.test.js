@@ -663,7 +663,7 @@ test('오래 쉬면 처음부터: 처음부터 다시 한 날을 기록하면 �
 });
 
 // 앱처럼 하루씩 기록한다: 그날 할 종목을 모두 하고(fail(no, id)면 실패) 그날 상태를 남긴다.
-function logDaily(c, logs, days, fail = () => false, ovw = () => null, ovr = () => null) {
+function logDaily(c, logs, days, fail = () => false, ovw = () => null, ovr = () => null, ovt = () => null) {
   let d = logs.length ? L.toNum(logs[logs.length - 1].d) + 1 : L.toNum(c.startDate);
   for (let k = 0; k < days; d++) {
     const n = L.simulate(c, logs, L.toStr(d), { until: -Infinity }).next;
@@ -673,7 +673,9 @@ function logDaily(c, logs, days, fail = () => false, ovw = () => null, ovr = () 
     for (const r of n.rows) if (r.id in res && ovw(n.no, r.id, n)) w[r.id] = ovw(n.no, r.id, n);
     const rr = {};
     for (const r of n.rows) if (r.id in res && ovr(n.no, r.id, n)) rr[r.id] = ovr(n.no, r.id, n);
-    logs.push(Object.assign({ d: L.toStr(d), res, p: 1, s: L.snapOf(n.rows, (r) => r.id in res) }, Object.keys(w).length ? { w } : {}, Object.keys(rr).length ? { r: rr } : {},
+    const tt = {};
+    for (const r of n.rows) if (r.id in res && ovt(n.no, r.id, n) != null) tt[r.id] = ovt(n.no, r.id, n);
+    logs.push(Object.assign({ d: L.toStr(d), res, p: 1, s: L.snapOf(n.rows, (r) => r.id in res) }, Object.keys(w).length ? { w } : {}, Object.keys(rr).length ? { r: rr } : {}, Object.keys(tt).length ? { t: tt } : {},
       n.pos === 0 && n.order === 'S' ? { o: 'S' } : {}));
     k++;
   }
@@ -857,4 +859,28 @@ test('기록할 때 세트·횟수(횟수 고정)를 바꾸면 그날 기록만 
   const r = sim.days.get(L.toNum(TODAY)).rows[0];
   assert.deepEqual([r.reps, r.sets, r.planR, r.planE], [8, 5, 5, 3]);
   assert.deepEqual([sim.next.rows[0].reps, sim.next.rows[0].sets], [5, 3]);
+});
+
+test('기록할 때 횟수 단계를 옮기면 그 단계부터 계획을 다시 이어 간다', () => {
+  const c = cfg();
+  c.acc = c.acc.filter((a) => a.id === 'press');            // 덤벨프레스 3·4·5회 (스쿼트 날)
+  const first = (no) => (nn, id, n) => (nn === no && id === 'press' && n.pos === 1 ? 0 : null);
+  const logs = logDaily(c, [], 9, () => false, () => null, () => null, first(2));   // 세션 2(4회 차례)의 첫 덤벨프레스를 1단계(3회)로
+  const sim = L.simulate(c, logs, null, { until: L.toNum(TODAY) + 60, minSessions: 6 });
+  const day = [...sim.days.values()].find((e) => e.kind === 'log' && e.no === 2 && e.pos === 1).rows.find((r) => r.id === 'press');
+  assert.deepEqual([day.reps, day.planR, day.planT, day.rstep], [3, 4, 1, 0]);
+  const s2 = [...sim.days.values()].filter((e) => e.no === 2 && e.type === 'S').map((e) => e.rows.find((r) => r.id === 'press').reps);
+  assert.deepEqual(s2, [3, 3, 3]);
+  // 세션 3: 4회, 세션 4는 하체 4단계라 쉼, 세션 5: 5회, 세션 6: 무게를 올려 3회
+  assert.deepEqual([3, 4, 5, 6].map((no) => { const p = sim.view(no).acc.press; return p.skip ? '쉼' : `${p.w}x${p.reps}`; }), ['7x4', '쉼', '7x5', '8x3']);
+});
+
+test('무게 고정 하체의 단계를 옮기면 데드리프트·스쿼트가 같이 옮겨 간다', () => {
+  const c = cfg();
+  c.acc = []; c.main.prog = 'w'; c.main.ladder = [3, 4, 5];
+  const logs = logDaily(c, [], 7, () => false, () => null, () => null, (no, id, n) => (no === 2 && n.pos === 0 ? 0 : null));
+  const sim = L.simulate(c, logs, null, { until: L.toNum(TODAY) + 30 });
+  const reps = [...sim.days.values()].filter((e) => e.no === 2).map((e) => e.rows[0].reps);
+  assert.deepEqual(reps, [3, 3, 3, 3, 3, 3]);
+  assert.equal(sim.view(3).main.reps, 4);
 });

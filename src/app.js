@@ -80,6 +80,11 @@
           if (Object.keys(w).length) o.w = w;
         }
         // 그날 계획과 다르게 한 횟수·세트
+        if (l.t && typeof l.t === 'object') {
+          const t = {};
+          for (const [id, v] of Object.entries(l.t)) if (Number.isInteger(v) && v >= -9 && v <= 30) t[id] = v;
+          if (Object.keys(t).length) o.t = t;
+        }
         for (const k of ['r', 'e']) {
           if (!l[k] || typeof l[k] !== 'object') continue;
           const x = {};
@@ -269,7 +274,7 @@
     if (row.retry) f += '<span class="flag retry">재도전</span>';
     if (row.rested) f += `<span class="flag rest">쉬어서 ${STEPS[row.rested] || row.rested} 단계 낮춤</span>`;
     if (row.lag) f += `<span class="flag lag">밀림 · 세션 ${row.accNo} 몫</span>`;
-    const was = [row.plan != null ? L.fmtW(Object.assign({}, row, { w: row.plan })) : '', row.planR != null ? `${row.planR}회` : '', row.planE != null ? `${row.planE}세트` : ''].filter(Boolean);
+    const was = [row.plan != null ? L.fmtW(Object.assign({}, row, { w: row.plan })) : '', row.planT != null ? stepName(row.planT) : '', row.planR != null ? `${row.planR}회` : '', row.planE != null ? `${row.planE}세트` : ''].filter(Boolean);
     if (was.length) f += `<span class="flag hold">계획 ${esc(was.join('·'))}에서 바꿈</span>`;
     return f;
   }
@@ -672,7 +677,19 @@
     const T = L.toNum(today);
     const e = m.sim.days.get(T);
     const info = e && (e.kind === 'plan' || e.kind === 'log') ? e : L.canLog(m.sim, T) ? m.sim.next : null;
-    return info ? { info, rows: info.rows.filter((r) => r.avail === 'ok') } : null;
+    if (!info) return null;
+    // 아직 기록하지 않았으면 기록 시트에서 바꿔 둔 무게·횟수·세트를 따른다 (기록했으면 그날 기록이 이미 반영돼 있다).
+    const dr = info.kind !== 'log' ? draftFor(T) : null;
+    const rows = info.rows.filter((r) => r.avail === 'ok').map((r) => {
+      if (!dr) return r;
+      const x = Object.assign({}, r);
+      if (dr.w[r.id] > 0 && !r.band && r.w != null) x.w = dr.w[r.id];
+      if (r.lad && Number.isInteger(dr.t[r.id])) x.reps = L.ladderReps({ ladder: r.lad }, dr.t[r.id]);
+      if (dr.r[r.id] > 0) x.reps = dr.r[r.id];
+      if (dr.e[r.id] > 0) x.sets = dr.e[r.id];
+      return x;
+    });
+    return { info, rows };
   }
   const running = () => Object.values(timer.items).some((t) => t.endAt > Date.now());
   function timerButton() {
@@ -964,18 +981,37 @@
   function renderPushCard() { const el = $('pushCard'); if (el) el.outerHTML = pushCard(); }
 
   // ---------- 기록 시트 ----------
+  // 저장하기 전 기록 시트에서 바꿔 둔 무게·횟수·세트·단계 (그날 하루, 이 기기에만). 휴식 타이머도 이 값을 따른다.
+  const DKEY = 'routine5.draft';
+  let draft = null;
+  try { const x = JSON.parse(localStorage.getItem(DKEY)); if (x && x.day === today && x.d != null) draft = x; } catch (e) { /* 저장소 없음 */ }
+  function setDraft(x) {
+    draft = x;
+    try { if (x) localStorage.setItem(DKEY, JSON.stringify(x)); else localStorage.removeItem(DKEY); } catch (e) { /* 저장소 없음 */ }
+  }
+  const draftFor = (day) => (draft && draft.day === today && draft.d === day ? draft : null);
+  function keepDraft() {
+    if (!sheet || sheet.kind !== 'log' || sheet.mode !== 'new') return;
+    const any = [sheet.w, sheet.r, sheet.e, sheet.t].some((x) => Object.keys(x).length);
+    setDraft(any ? { day: today, d: sheet.day, w: sheet.w, r: sheet.r, e: sheet.e, t: sheet.t } : null);
+  }
   function openSheet(mode, day) {
     const li = mode === 'new' ? data.logs.length : data.logs.findIndex((l) => L.toNum(l.d) === day);
     if (li < 0) return;
-    const res = {}, w = {}, rr = {}, e = {};
+    const res = {}, w = {}, rr = {}, e = {}, t = {};
     if (mode === 'edit') {
       const ev = model(weekMon + 6).sim.days.get(day);
       for (const r of ev.rows) if (r.avail === 'ok' && r.result != null) res[r.id] = r.result;
-      Object.assign(w, data.logs[li].w || {}); Object.assign(rr, data.logs[li].r || {}); Object.assign(e, data.logs[li].e || {});
+      const lg = data.logs[li];
+      Object.assign(w, lg.w || {}); Object.assign(rr, lg.r || {}); Object.assign(e, lg.e || {}); Object.assign(t, lg.t || {});
+    } else {
+      // 저장하기 전에 바꿔 둔 값 (닫았다 열어도, 휴식 타이머에도 그대로)
+      const dr = draftFor(day);
+      if (dr) { Object.assign(w, dr.w); Object.assign(rr, dr.r); Object.assign(e, dr.e); Object.assign(t, dr.t); }
     }
-    // w·r·e: 그날 계획과 다르게 한 무게·횟수·세트, ew: 입력칸을 연 종목
-    const open = new Set([...Object.keys(w), ...Object.keys(rr), ...Object.keys(e)]);
-    sheet = { kind: 'log', mode, day, li, res, w, r: rr, e, ew: open, confirmDel: false, opener: document.activeElement };
+    // w·r·e·t: 그날 계획과 다르게 한 무게·횟수·세트·단계, ew: 입력칸을 연 종목
+    const open = new Set([w, rr, e, t].flatMap(Object.keys));
+    sheet = { kind: 'log', mode, day, li, res, w, r: rr, e, t, ew: open, confirmDel: false, opener: document.activeElement };
     $('sheet').hidden = false;
     renderSheet(model(weekMon + 6));
     const first = $('panel').querySelector('button');
@@ -1016,23 +1052,23 @@
       const v = sheet.res[r.id];
       // 계획(고치기에서는 그날 계획: plan·planR·planE)과 지금 고른 값. 무게는 고무밴드·무게 생략 종목이면 못 바꾼다.
       const canW = !r.band && r.w != null;
-      const pl0 = { w: r.plan != null ? r.plan : r.w, reps: r.planR != null ? r.planR : r.reps, sets: r.planE != null ? r.planE : r.sets };
-      const ch = changedOf(r.id, pl0, canW);
-      const cur = Object.assign({}, r, { w: ch.w != null ? ch.w : pl0.w, reps: ch.reps || pl0.reps, sets: ch.sets || pl0.sets, plan: undefined, planR: undefined, planE: undefined });
-      const any = ch.w != null || ch.reps || ch.sets;
-      const planTxt = `${canW ? L.fmtW(Object.assign({}, r, { w: pl0.w })) + ' · ' : ''}${pl0.reps}회 × ${pl0.sets}세트`;
+      const pl0 = planOf(r);
+      const ch = changedOf(r, pl0);
+      const cur = Object.assign({}, r, { w: ch.w != null ? ch.w : pl0.w, reps: ch.reps || ch.P, sets: ch.sets || pl0.sets, plan: undefined, planR: undefined, planE: undefined, planT: undefined });
+      const any = ch.w != null || ch.reps || ch.sets || ch.t != null;
+      const planTxt = `${canW ? L.fmtW(Object.assign({}, r, { w: pl0.w })) + ' · ' : ''}${r.lad ? stepName(pl0.step) + ' ' : ''}${pl0.reps}회 × ${pl0.sets}세트`;
       const pl = plates(cur);
       h += `<div class="lrow"><div><div class="nm">${esc(r.name)}${flags(cur)}</div><div class="rx"><b>${wHtml(cur)}</b> · ${cur.reps}회 × ${cur.sets}세트${any ? ` <span class="planw">계획 ${esc(planTxt)}</span>` : ''}</div>
         ${pl ? `<div class="rx pl-line"><span class="pl">${pl.label}</span>${esc(pl.text)}</div>` : ''}${pl && pl.unbalanced ? `<div class="rx bal">${BALANCE_NOTE}</div>` : ''}
-        ${!sheet.ew.has(r.id) ? `<button type="button" class="linkbtn" data-act="lwOpen" data-id="${esc(r.id)}">${canW ? '무게·횟수·세트' : '횟수·세트'} 바꾸기</button>` : ''}</div>
+        ${!sheet.ew.has(r.id) ? `<button type="button" class="linkbtn" data-act="lwOpen" data-id="${esc(r.id)}">${[canW ? '무게' : '', r.lad ? '단계' : '', '횟수·세트'].filter(Boolean).join('·')} 바꾸기</button>` : ''}</div>
         <div class="seg" role="group" aria-label="${esc(r.name)} 결과">
           <button type="button" class="y" data-act="res" data-id="${esc(r.id)}" data-v="1" aria-pressed="${v === true}">성공</button>
           <button type="button" class="n" data-act="res" data-id="${esc(r.id)}" data-v="0" aria-pressed="${v === false}">실패</button>
-        </div>${sheet.ew.has(r.id) ? `<div class="lw"><div class="lwf">
+        </div>${sheet.ew.has(r.id) ? `<div class="lw">${r.lad ? stepSelect(r, pl0, ch) : ''}<div class="lwf">
           ${canW ? `<label class="field"><span>무게 (kg)</span><input type="number" inputmode="decimal" step="0.5" min="0" id="lw-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="w" value="${ch.w != null ? ch.w : L.roundW(pl0.w)}"></label>` : ''}
           <label class="field"><span>횟수</span><input type="number" inputmode="numeric" step="1" min="1" id="lr-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="r" value="${cur.reps}"></label>
           <label class="field"><span>세트</span><input type="number" inputmode="numeric" step="1" min="1" id="le-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="e" value="${cur.sets}"></label></div>
-          <div class="lwfoot"><span class="small">바꾼 값은 저장할 때 남아요</span><button type="button" class="btn ghost" data-act="lwReset" data-id="${esc(r.id)}">계획대로</button></div>
+          <div class="lwfoot"><span class="small">저장하면 기록에 남아요</span><button type="button" class="btn ghost" data-act="lwReset" data-id="${esc(r.id)}">계획대로</button></div>
           ${changeHints(r, pl0, ch)}</div>` : ''}</div>`;
     }
     h += '</div>';
@@ -1053,10 +1089,26 @@
     const w = Number(sheet.w[id]);
     return w > 0 && Math.abs(w - plan) >= 0.005 ? Math.round(w * 100) / 100 : null;
   }
-  // 계획(pl0: w·reps·sets)과 다르게 고른 무게·횟수·세트 (같으면 null)
-  function changedOf(id, pl0, canW) {
-    const n = (v, p) => (Number.isInteger(v) && v >= 1 && v !== p ? v : null);
-    return { w: canW ? changedW(id, pl0.w) : null, reps: n(sheet.r[id], pl0.reps), sets: n(sheet.e[id], pl0.sets) };
+  // 그 줄의 계획 (고치기에서는 그날 바꾸기 전 계획: plan·planR·planE·planT)
+  const planOf = (r) => ({ w: r.plan != null ? r.plan : r.w, reps: r.planR != null ? r.planR : r.reps, sets: r.planE != null ? r.planE : r.sets,
+    step: r.planT != null ? r.planT : r.rstep });
+  const stepName = (t) => (t >= 0 ? `${t + 1}단계` : `${-t}단계 낮춤`);
+  // 계획(pl0)과 다르게 고른 단계·무게·횟수·세트 (같으면 null). P = 고른 단계의 계획 횟수(바꾼 횟수는 이것과 비교).
+  function changedOf(r, pl0) {
+    const id = r.id, n = (v, p) => (Number.isInteger(v) && v >= 1 && v !== p ? v : null);
+    const t = r.lad && Number.isInteger(sheet.t[id]) && sheet.t[id] !== pl0.step ? sheet.t[id] : null;
+    const P = t != null ? L.ladderReps({ ladder: r.lad }, t) : pl0.reps;
+    return { t, P, w: !r.band && r.w != null ? changedW(id, pl0.w) : null, reps: n(sheet.r[id], P), sets: n(sheet.e[id], pl0.sets) };
+  }
+  // 횟수 단계 고르기 (무게 고정 종목)
+  function stepSelect(r, pl0, ch) {
+    const cur = ch.t != null ? ch.t : pl0.step, top = r.lad.length - 1, x = { ladder: r.lad };
+    let o = '';
+    for (let t = Math.min(-2, pl0.step, cur); t <= top; t++) {
+      if (t < 0 && L.ladderReps(x, t) === L.ladderReps(x, t + 1)) continue;
+      o += `<option value="${t}" ${t === cur ? 'selected' : ''}>${stepName(t)} · ${L.ladderReps(x, t)}회${t === pl0.step ? ' (계획)' : ''}</option>`;
+    }
+    return `<label class="field"><span>횟수 단계${r.main ? ' (데드리프트·스쿼트 같이)' : ''}</span><select id="lt-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="t">${o}</select></label>`;
   }
   // 바꾼 값이 다음 계산에 어떻게 쓰이는지
   function changeHints(r, pl0, ch) {
@@ -1066,12 +1118,12 @@
       out.push(ch.w > pl0.w ? `무게: 성공하면 이 세션의 남은 운동과 다음 세션을 ${W(ch.w)}에서 이어 가고, 실패하면 계획 무게(${W(pl0.w)})로 실패한 것으로 봐요.`
         : `무게: 성공·실패 모두 이 세션의 남은 운동과 다음 세션을 ${W(ch.w)}에서 이어 가요.`);
     }
-    if (ch.reps && r.lad) {
-      // 횟수 단계(사다리)를 바꾼 횟수 기준으로 원래 간격만큼 오르내린다
-      const x = { ladder: r.lad }, t = r.rstep, top = r.lad.length - 1;
+    if ((ch.reps || ch.t != null) && r.lad) {
+      // 고른 단계에서, 바꾼 횟수 기준으로 원래 간격만큼 오르내린다
+      const x = { ladder: r.lad }, t = ch.t != null ? ch.t : pl0.step, top = r.lad.length - 1, R = ch.reps || ch.P;
       const up = t < top ? L.ladderReps(x, t + 1) - L.ladderReps(x, t) : null;
       const down = L.ladderReps(x, t) - L.ladderReps(x, t - 1) || 1;
-      out.push(`횟수: 이 세션의 남은 운동은 ${ch.reps}회, 다음 세션은 성공하면 ${up != null ? `${ch.reps + up}회` : `무게를 올려 처음 횟수(${r.lad[0]}회)부터`}, 실패하면 ${Math.max(1, ch.reps - down)}회예요.`);
+      out.push(`${ch.t != null ? `단계: ${stepName(t)}로 옮겨요${r.main ? '(데드리프트·스쿼트 같이)' : ''}. 이 세션의 남은 운동과 다음 세션도 이 단계에서 이어 가요. ` : ''}횟수: 이 세션의 남은 운동은 ${R}회, 다음 세션은 성공하면 ${up != null ? `${R + up}회` : `무게를 올려 처음 횟수(${r.lad[0]}회)부터`}, 실패하면 ${Math.max(1, R - down)}회예요.`);
     } else if (ch.reps) out.push('횟수: 횟수 단계가 없는 종목이라 오늘 기록에만 남아요.');
     if (ch.sets) out.push('세트: 오늘 기록에만 남아요.');
     return out.length ? `<p class="small">${out.join('<br>')}</p>` : '';
@@ -1089,22 +1141,23 @@
     // 그날의 상태·무게·횟수도 남긴다 (나중에 설정을 바꿔도 이 기록은 그대로).
     const s = L.snapOf(info.rows, (r) => r.id in res);
     // 계획과 다르게 한 무게·횟수·세트
-    const w = {}, rr = {}, e = {};
+    const w = {}, rr = {}, e = {}, t = {};
     for (const r of info.rows) {
       if (!(r.id in res)) continue;
-      const pl0 = { w: r.plan != null ? r.plan : r.w, reps: r.planR != null ? r.planR : r.reps, sets: r.planE != null ? r.planE : r.sets };
-      const ch = changedOf(r.id, pl0, !r.band && r.w != null);
+      const ch = changedOf(r, planOf(r));
       if (ch.w != null) w[r.id] = ch.w;
       if (ch.reps) rr[r.id] = ch.reps;
       if (ch.sets) e[r.id] = ch.sets;
+      if (ch.t != null) t[r.id] = ch.t;
     }
     // 스쿼트부터 시작한 세션이면 그 세션 첫 운동 기록에 남긴다 (고치기는 그때 것 그대로).
     const o = sheet.mode === 'new' ? (info.pos === 0 && info.order === 'S' ? 'S' : null) : data.logs[sheet.li].o;
     const some = (x) => Object.keys(x).length > 0;
     const entry = (d) => Object.assign({ d, res, p: 1 }, o ? { o } : {}, some(bands) ? { b: bands } : {},
-      some(w) ? { w } : {}, some(rr) ? { r: rr } : {}, some(e) ? { e } : {}, { s });
+      some(w) ? { w } : {}, some(rr) ? { r: rr } : {}, some(e) ? { e } : {}, some(t) ? { t } : {}, { s });
     if (sheet.mode === 'new') {
       data.logs.push(entry(L.toStr(sheet.day)));
+      setDraft(null);
       const after = L.simulate(data.cfg, data.logs, today, { until: -Infinity });
       let msg;
       if (after.cur.no > m.cur.no) {
@@ -1479,7 +1532,7 @@
       <li>한 세션(운동 6회)을 하는 동안 2일 이상 쉬었다면 세션 뒤 정식 휴식은 건너뛰어요.</li>
       <li>한 종목을 ${L.GAP1}일 이상 쉬면(그 종목을 마지막으로 한 다음 날부터 센 날 수) 성공·실패와 상관없이 그 종목의 세션을 처음부터 다시 하고 한 단계 낮춰요. 횟수 고정은 무게 한 단계(−5% 등), 무게 고정은 횟수 한 단계예요. ${L.GAP2}일 이상이면 한 단계 더 낮춰요. 그 뒤로도 실패하면 다음 세션에 한 단계 낮추는 건 그대로예요.</li>
       <li>하체는 데드리프트·스쿼트 중 더 오래 쉰 쪽으로 세고, 하체 세션을 처음부터 다시 하면 그 세션의 상체·팔도 처음부터 해요(무게는 종목마다 쉰 날 수대로). 상체·팔이 쉬는 하체 마지막 단계 세션은 쉬는 날로 세지 않고, 고무밴드는 낮추지 않아요. 쉰 지 ${L.GAP1 - 2}·${L.GAP1 - 1}일째 되는 날엔 이번 주 화면 위에 알려줘요.</li>
-      <li>기록할 때 종목마다 <b>무게·횟수·세트 바꾸기</b>로 실제로 한 대로 넣을 수 있어요. 횟수 단계가 있는 종목은 바꾼 횟수에서 원래 간격만큼 오르내리고(성공·실패 모두), 세트는 그날 기록에만 남아요. 계획보다 무겁게 해서 성공하면 그 무게에서, 실패하면 계획 무게에서 이어 가요. 가볍게 했으면 성공·실패 모두 그 무게에서 이어 가요(그 세션의 남은 운동도).</li>
+      <li>기록할 때 종목마다 <b>바꾸기</b>로 실제로 한 대로 넣을 수 있어요. 무게 고정 종목은 횟수 단계를 옮길 수 있고(그 단계부터 계획을 이어 감), 바꾼 횟수에서는 원래 간격만큼 오르내려요(성공·실패 모두). 세트는 그날 기록에만 남고, 저장하기 전에 바꿔 둔 세트는 휴식 타이머도 따라가요. 계획보다 무겁게 해서 성공하면 그 무게에서, 실패하면 계획 무게에서 이어 가요. 가볍게 했으면 성공·실패 모두 그 무게에서 이어 가요(그 세션의 남은 운동도).</li>
       <li>휴식일에도 운동했다면 기록할 수 있고, 기록하면 운동한 날로 계산해요.</li>
       <li>이미 하던 루틴이면 시작 지점을 그 세션·순서·무게로 옮기고, 그 뒤 지난 날들을 날짜순으로 기록해 이어가요.</li>
       <li>스쿼트 시작 무게는 따로 넣을 수 있어요(비워 두면 추천 무게 = 데드리프트 ÷ 1.2). 둘은 한 묶음으로 같은 단계를 같이 오르내려요. 하체를 하나라도 실패하면 다음 세션은 한 단계 낮춰 다시 해요.</li>
@@ -1794,7 +1847,7 @@
       if (sheet && sheet.kind === 'log') renderSheet(model(weekMon + 6));
     }
     else if (act === 'lwOpen') { sheet.ew.add(b.dataset.id); renderSheet(model(weekMon + 6)); const el = $('lw-' + b.dataset.id) || $('lr-' + b.dataset.id); if (el) { el.focus(); el.select(); } }
-    else if (act === 'lwReset') { for (const k of ['w', 'r', 'e']) delete sheet[k][b.dataset.id]; sheet.ew.delete(b.dataset.id); renderSheet(model(weekMon + 6)); }
+    else if (act === 'lwReset') { for (const k of ['w', 'r', 'e', 't']) delete sheet[k][b.dataset.id]; sheet.ew.delete(b.dataset.id); keepDraft(); renderSheet(model(weekMon + 6)); }
     else if (act === 'askDel') { sheet.confirmDel = true; renderSheet(model(weekMon + 6)); }
     else if (act === 'keepLog') { sheet.confirmDel = false; renderSheet(model(weekMon + 6)); }
     else if (act === 'delLog') { data.logs.pop(); closeSheet(); commit('기록을 지웠어요'); }
@@ -1854,9 +1907,12 @@
     else if (t.dataset.addpick && sheet && sheet.kind === 'add') { sheet.pick = t.value; sheet.x = draftEx(PRESETS.find((x) => x.id === t.value) || null, sheet.x.day); sheet.err = ''; renderAdd(); }
     else if (t.dataset.lw && sheet && sheet.kind === 'log') {
       const id = t.dataset.lw, f = t.dataset.lf || 'w', box = sheet[f], v = Number(t.value);
-      const ok = f === 'w' ? v > 0 && v <= 1000 : Number.isInteger(v) && v >= 1 && v <= 100;
+      const ok = f === 'w' ? v > 0 && v <= 1000 : f === 't' ? Number.isInteger(v) : Number.isInteger(v) && v >= 1 && v <= 100;
       if (t.value !== '' && !ok) { toast(f === 'w' ? '무게를 확인해 주세요' : `${f === 'r' ? '횟수' : '세트'}는 1~100 사이 정수로 넣어 주세요`); renderSheet(model(weekMon + 6)); return; }
       if (t.value === '') delete box[id]; else box[id] = v;
+      // 단계를 옮기면 횟수는 그 단계의 횟수부터 다시 고른다
+      if (f === 't') delete sheet.r[id];
+      keepDraft();
       renderSheet(model(weekMon + 6));
     }
     else if (t.dataset.k) applySetting(t);

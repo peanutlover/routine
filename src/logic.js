@@ -345,12 +345,13 @@ const RoutineLogic = (() => {
   // 세션 6번째 운동 다음 날은 정식 휴식. 단, 그 세션을 하는 동안 REST_SKIP일 이상 쉬었다면 건너뛴다.
   // 휴식일에도 기록하면 운동한 날로 계산한다.
   // 기록 형식: {d, res:{종목id: true|false}, p:1}. p가 없는 예전 기록은 고르지 않은 종목을 성공으로 본다.
-  //   w:{종목id: 무게} = 그날 계획과 다른 무게로 했으면 실제로 든 무게. r·e:{종목id: 횟수·세트} = 계획과 다르게 한 횟수·세트. o:'S' = 그 세션을 스쿼트부터 했다 (세션 첫 운동 기록에).
+  //   w:{종목id: 무게} = 그날 계획과 다른 무게로 했으면 실제로 든 무게. r·e:{종목id: 횟수·세트} = 계획과 다르게 한 횟수·세트. t: 아래. o:'S' = 그 세션을 스쿼트부터 했다 (세션 첫 운동 기록에).
   // 무게를 바꿔서 했으면 그 무게를 기준으로 그 세션의 남은 운동과 다음 세션을 계산한다. 단, 계획보다 무겁게 해서 실패했으면
   //   계획 무게가 기준이다 (그 무게로 실패 처리). 계획보다 가볍게 했으면 성공·실패 모두 바꾼 무게가 기준.
   //   횟수 단계가 있는 종목(무게 고정)에서 횟수를 바꾸면 성공·실패 모두 바꾼 횟수가 기준: 그 세션의 남은 운동은 그 횟수, 다음 세션은
   //   거기서 원래 사다리 간격만큼 오르내린다 (4·6·8회의 6회 차례에 10회 성공 → 12회). 묶음을 마치고 무게를 올리면 사다리 처음부터.
   //   세트, 횟수 단계가 없는 종목(횟수 고정·고무밴드)의 횟수는 그날 기록만 바꾼다.
+  //   t:{종목id: 단계} = 횟수 단계를 옮겨서 했으면 그 단계(0부터, 음수는 첫 칸 아래). 그 단계부터 계획을 다시 이어 간다.
   // 오래 쉬면 처음부터: 한 종목을 GAP1일 이상 쉬면(마지막으로 한 다음 날부터 다시 하는 날 전날까지 센 날 수) 성공·실패와 상관없이
   //   그 종목의 진행 중인 세션을 처음부터 다시 하고 한 단계 낮춘다. GAP2일 이상이면 한 단계 더 (한 번 쉬는 동안 두 단계까지).
   //   하체는 데드리프트·스쿼트 중 더 오래 쉰 쪽으로 세고, 세션(6회)을 데드리프트부터 다시 한다. 둘은 같이 낮아진다.
@@ -570,24 +571,35 @@ const RoutineLogic = (() => {
       }
     }
     // 그날 바꾼 무게(ov)로 한 종목: 보여줄 무게를 바꾸고(plan = 계획 무게), 기준 무게가 달라지면 그 종목의 상태를 그 무게로 맞춘다.
+    // 그 종목의 상태를 바꾼다 (하체는 진행 중인 세션, 보조 종목은 지금 세션). f(state) → 새 state
+    function setState(r, f) {
+      if (r.main) {
+        const cur = S[S.length - 1];
+        cur.state = f(Object.assign({}, cur.state));
+        cur.presc = Object.assign(mainPresc(cfg, cur.state), { top: cur.presc.top });
+      } else {
+        const X = A.find((y) => y.a.id === r.id), x = X.sess[X.i];
+        x.state = f(Object.assign({}, x.state)); x.presc = null;
+      }
+    }
     function overrideDay(info, lg) {
       for (const r of info.rows) {
         if (r.avail !== 'ok' || typeof r.result !== 'boolean') continue;
-        const R = lg.r && lg.r[r.id], E = lg.e && lg.e[r.id];
+        const R = lg.r && lg.r[r.id], E = lg.e && lg.e[r.id], T = lg.t && lg.t[r.id];
         if (E > 0 && E !== r.sets) { r.planE = r.sets; r.sets = E; }
+        // 단계 옮기기 (횟수 단계가 있는 종목): 그 단계부터 다시, 바꾼 횟수(ro)는 지운다. 하체는 데드리프트·스쿼트가 같이 옮겨 간다.
+        if (r.lad && Number.isInteger(T) && T !== r.rstep) {
+          const t = Math.max(-9, Math.min(r.lad.length - 1, T));
+          r.planT = r.rstep; r.planR = r.reps;
+          setState(r, (st) => Object.assign(st, { step: t, ro: r.main ? Object.assign({}, st.ro, { [r.id]: 0 }) : 0 }));
+          r.rstep = t; r.reps = ladderReps({ ladder: r.lad }, t);
+        }
         if (!(R > 0) || R === r.reps) continue;
         const P = r.reps;
-        r.planR = P; r.reps = R;
+        if (r.planR == null) r.planR = P;
+        r.reps = R;
         if (!r.lad) continue;
-        if (r.main) {
-          const cur = S[S.length - 1], ro = Object.assign({}, cur.state.ro);
-          ro[r.id] = (ro[r.id] || 0) + R - P;
-          cur.state = Object.assign({}, cur.state, { ro });
-          cur.presc = Object.assign(mainPresc(cfg, cur.state), { top: cur.presc.top });
-        } else {
-          const X = A.find((y) => y.a.id === r.id), x = X.sess[X.i];
-          x.state = Object.assign({}, x.state, { ro: (x.state.ro || 0) + R - P }); x.presc = null;
-        }
+        setState(r, (st) => Object.assign(st, { ro: r.main ? Object.assign({}, st.ro, { [r.id]: ((st.ro || {})[r.id] || 0) + R - P }) : (st.ro || 0) + R - P }));
       }
       if (lg.w) overrideW(info, lg.w);
     }
@@ -620,7 +632,7 @@ const RoutineLogic = (() => {
     function apply(d, info, res, legacy, nextMain, lg) {
       const got = (id) => (legacy ? res[id] !== false : typeof res[id] === 'boolean' ? res[id] : null);
       for (const r of info.rows) r.result = r.avail === 'ok' ? got(r.id) : null;
-      if (lg && (lg.w || lg.r || lg.e)) overrideDay(info, lg);
+      if (lg && (lg.w || lg.r || lg.e || lg.t)) overrideDay(info, lg);
       for (const r of info.rows) {
         if (r.main || r.result == null) continue;
         const X = A.find((x) => x.a.id === r.id);
