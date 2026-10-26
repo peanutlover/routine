@@ -663,13 +663,15 @@ test('오래 쉬면 처음부터: 처음부터 다시 한 날을 기록하면 �
 });
 
 // 앱처럼 하루씩 기록한다: 그날 할 종목을 모두 하고(fail(no, id)면 실패) 그날 상태를 남긴다.
-function logDaily(c, logs, days, fail = () => false) {
+function logDaily(c, logs, days, fail = () => false, ovw = () => null) {
   let d = logs.length ? L.toNum(logs[logs.length - 1].d) + 1 : L.toNum(c.startDate);
   for (let k = 0; k < days; d++) {
     const n = L.simulate(c, logs, L.toStr(d), { until: -Infinity }).next;
     const res = {};
     for (const r of n.rows) if (r.avail === 'ok') res[r.id] = !fail(n.no, r.id);
-    logs.push({ d: L.toStr(d), res, p: 1, s: L.snapOf(n.rows, (r) => r.id in res) });
+    const w = {};
+    for (const r of n.rows) if (r.id in res && ovw(n.no, r.id, n)) w[r.id] = ovw(n.no, r.id, n);
+    logs.push(Object.assign({ d: L.toStr(d), res, p: 1, s: L.snapOf(n.rows, (r) => r.id in res) }, Object.keys(w).length ? { w } : {}));
     k++;
   }
   return logs;
@@ -743,4 +745,50 @@ test('스쿼트 시작 무게를 따로 넣으면 그 무게부터, 비우면 �
   const before = loggedRows(c, logs, 'sq');
   c.main.sq = 70;
   assert.deepEqual(loggedRows(c, logs, 'sq'), before);
+});
+
+// 세션 2 첫 스쿼트(세션의 2번째 운동)만 무게를 바꿔서 하고 결과는 ok
+function overSq(w, ok) {
+  const c = cfg();
+  c.main.dl = 102; c.acc = [];
+  let done = false;
+  const logs = logDaily(c, [], 12, (no, id) => !ok && no === 2 && id === 'sq' && !done && (done = true),
+    (no, id, n) => (no === 2 && id === 'sq' && n.pos === 1 ? w : null));
+  const sim = L.simulate(c, logs, null, { until: L.toNum(TODAY) + 30 });
+  const day = [...sim.days.values()].find((e) => e.kind === 'log' && e.no === 2 && e.pos === 1);
+  const sq = day.rows.find((r) => r.id === 'sq');
+  const s2 = [...sim.days.values()].filter((e) => e.kind === 'log' && e.no === 2 && e.type === 'S').map((e) => r1(e.rows[0].w));
+  return { shown: [r1(sq.w), r1(sq.plan)], s2, next: [r1(sim.view(3).main.dl), r1(sim.view(3).main.sq)] };
+}
+
+test('기록할 때 무게를 바꾸면: 무겁게 성공 → 그 무게 기준, 무겁게 실패 → 계획 무게 기준', () => {
+  const up = overSq(95, true);
+  assert.deepEqual(up.shown, [95, 89.3]);
+  assert.deepEqual(up.s2, [95, 95, 95]);                   // 그 세션의 남은 스쿼트도 95kg
+  assert.deepEqual(up.next, [112.5, r1(95 * 1.05)]);       // 데드리프트는 그대로
+  const upFail = overSq(95, false);
+  assert.deepEqual(upFail.shown, [95, 89.3]);
+  assert.deepEqual(upFail.s2, [95, 89.3, 89.3]);           // 실패했으니 남은 운동은 계획 무게
+  assert.deepEqual(upFail.next, [102, 85]);                // 세션 실패 → 계획 무게(89.25)에서 한 단계 아래
+});
+
+test('기록할 때 무게를 바꾸면: 가볍게 하면 성공·실패 모두 그 무게 기준', () => {
+  const dn = overSq(80, true);
+  assert.deepEqual(dn.shown, [80, 89.3]);
+  assert.deepEqual(dn.next, [112.5, 84]);
+  const dnFail = overSq(80, false);
+  assert.deepEqual(dnFail.next, [102, r1(80 / 1.05)]);
+});
+
+test('기록할 때 무게를 바꾸면: 보조 종목(무게 고정·횟수 고정)도 그 무게에서 이어 가고, 고쳐 저장해도 그대로', () => {
+  const c = cfg();
+  const bench = L.accDefaults(L.EXTRA.find((x) => x.id === 'bench'));
+  Object.assign(bench, { w: 40, prog: 'r', reps: 5 });
+  c.acc = c.acc.filter((a) => a.id === 'ohp').concat(bench);
+  const logs = logDaily(c, [], 9, () => false, (no, id) => (no === 1 && id === 'bench' ? 45 : no === 1 && id === 'ohp' ? 15 : null));
+  const sim = L.simulate(c, logs, null, { until: L.toNum(TODAY) + 30 });
+  assert.deepEqual([1, 2, 3].map((no) => r1(sim.acc.bench[no - 1].presc.w)), [45, 47.3, 49.6]);
+  assert.equal(sim.acc.ohp[1].presc.w, 15);
+  const again = L.snapLogs(c, logs.map((l) => Object.assign({}, l)), 0);
+  assert.deepEqual(loggedRows(c, again, 'bench'), loggedRows(c, logs, 'bench'));
 });

@@ -342,6 +342,9 @@ const RoutineLogic = (() => {
   // 세션 6번째 운동 다음 날은 정식 휴식. 단, 그 세션을 하는 동안 REST_SKIP일 이상 쉬었다면 건너뛴다.
   // 휴식일에도 기록하면 운동한 날로 계산한다.
   // 기록 형식: {d, res:{종목id: true|false}, p:1}. p가 없는 예전 기록은 고르지 않은 종목을 성공으로 본다.
+  //   w:{종목id: 무게} = 그날 계획과 다른 무게로 했으면 실제로 든 무게.
+  // 무게를 바꿔서 했으면 그 무게를 기준으로 그 세션의 남은 운동과 다음 세션을 계산한다. 단, 계획보다 무겁게 해서 실패했으면
+  //   계획 무게가 기준이다 (그 무게로 실패 처리). 계획보다 가볍게 했으면 성공·실패 모두 바꾼 무게가 기준.
   // 오래 쉬면 처음부터: 한 종목을 GAP1일 이상 쉬면(마지막으로 한 다음 날부터 다시 하는 날 전날까지 센 날 수) 성공·실패와 상관없이
   //   그 종목의 진행 중인 세션을 처음부터 다시 하고 한 단계 낮춘다. GAP2일 이상이면 한 단계 더 (한 번 쉬는 동안 두 단계까지).
   //   하체는 데드리프트·스쿼트 중 더 오래 쉰 쪽으로 세고, 세션(6회)을 데드리프트부터 다시 한다. 둘은 같이 낮아진다.
@@ -550,11 +553,38 @@ const RoutineLogic = (() => {
         r.reps = x.r; r.sets = x.e;
       }
     }
-    let restDay = null, skipNote = null;
-    function apply(d, info, res, legacy, nextMain) {
-      const got = (id) => (legacy ? res[id] !== false : typeof res[id] === 'boolean' ? res[id] : null);
+    // 그날 바꾼 무게(ov)로 한 종목: 보여줄 무게를 바꾸고(plan = 계획 무게), 기준 무게가 달라지면 그 종목의 상태를 그 무게로 맞춘다.
+    function overrideW(info, ov) {
       for (const r of info.rows) {
-        r.result = r.avail === 'ok' ? got(r.id) : null;
+        const w = ov[r.id];
+        if (!(w > 0) || r.avail !== 'ok' || typeof r.result !== 'boolean' || r.band || r.w == null) continue;
+        const plan = r.w;
+        if (Math.abs(w - plan) < 0.005) continue;
+        r.plan = plan; r.w = w;
+        if (r.main) info.main = Object.assign({}, info.main, { [r.id]: w });
+        const basis = w < plan || r.result ? w : plan;
+        if (Math.abs(basis - plan) < 0.005) continue;
+        if (r.main) {
+          const cur = S[S.length - 1], st = cur.state, an = st.an || mainAnchors(cfg, 1);
+          cur.state = Object.assign({}, st, { an: Object.assign({}, an, { [r.id]: { l: st.level, w: basis, i: an[r.id].i } }) });
+          cur.presc = Object.assign(mainPresc(cfg, cur.state), { top: cur.presc.top });
+          continue;
+        }
+        const X = A.find((x) => x.a.id === r.id), s = X.sess[X.i], st = Object.assign({}, s.state);
+        if (X.a.prog === 'r') {
+          // 횟수 고정: 지금 칸의 무게가 basis가 되게 기준 무게를 다시 잡는다 (안 되면 basis를 첫 칸으로)
+          const base = stepW(cfg, X.a, st.mode, basis, -st.step);
+          if (Math.abs(stepW(cfg, X.a, st.mode, base, st.step) - basis) < 0.01) st.w = base; else { st.w = basis; st.step = 0; }
+        } else st.w = basis;
+        s.state = st; s.presc = null;
+      }
+    }
+    let restDay = null, skipNote = null;
+    function apply(d, info, res, legacy, nextMain, ov) {
+      const got = (id) => (legacy ? res[id] !== false : typeof res[id] === 'boolean' ? res[id] : null);
+      for (const r of info.rows) r.result = r.avail === 'ok' ? got(r.id) : null;
+      if (ov) overrideW(info, ov);
+      for (const r of info.rows) {
         if (r.main || r.result == null) continue;
         const X = A.find((x) => x.a.id === r.id);
         X.sess[X.i].res.push(r.result);
@@ -608,7 +638,7 @@ const RoutineLogic = (() => {
       if (lg.b) for (const r of info.rows) if (r.band && Array.isArray(lg.b[r.id])) r.bands = lg.b[r.id].slice();
       if (sn) shown(info, sn);
       days.set(ld, Object.assign(info, { kind: 'log', li, restSkipped: ld === skipNote }));
-      apply(ld, info, lg.res || {}, !lg.p, mainSnapOf(li + 1));
+      apply(ld, info, lg.res || {}, !lg.p, mainSnapOf(li + 1), lg.w);
       last = ld;
       d = ld + 1;
     });
