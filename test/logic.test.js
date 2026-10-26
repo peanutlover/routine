@@ -884,3 +884,29 @@ test('무게 고정 하체의 단계를 옮기면 데드리프트·스쿼트가 
   assert.deepEqual(reps, [3, 3, 3, 3, 3, 3]);
   assert.equal(sim.view(3).main.reps, 4);
 });
+
+test('횟수 고정 하체의 단계를 옮기면 그 단계 무게부터 묶음을 이어 간다 (데드리프트·스쿼트 같이)', () => {
+  const c = cfg();
+  c.main.dl = 102; c.acc = [];
+  // 세션 2(2단계) 첫날 1단계로
+  const logs = logDaily(c, [], 7, () => false, () => null, () => null, (no, id, n) => (no === 2 && n.pos === 0 ? 0 : null));
+  const sim = L.simulate(c, logs, null, { until: L.toNum(TODAY) + 60, minSessions: 7 });
+  const d1 = [...sim.days.values()].find((e) => e.kind === 'log' && e.no === 2 && e.pos === 0).rows[0];
+  assert.deepEqual([r1(d1.w), r1(d1.plan), d1.planT, d1.rstep], [102, 107.1, 1, 0]);
+  const s2 = [...sim.days.values()].filter((e) => e.no === 2).map((e) => r1(e.rows[0].w));
+  assert.deepEqual(s2, [102, 85, 102, 85, 102, 85]);
+  assert.deepEqual([3, 4, 5, 6].map((no) => [sim.view(no).main.stage, r1(sim.view(no).main.sq)]), [[2, 89.3], [3, 93.7], [4, 98.4], [1, 89.3]]);
+});
+
+test('횟수 고정 보조 종목의 단계를 옮기면 그 단계 무게부터', () => {
+  const c = cfg();
+  const bench = L.accDefaults(L.EXTRA.find((x) => x.id === 'bench'));
+  Object.assign(bench, { w: 40, prog: 'r', reps: 5 });
+  c.acc = [bench];
+  const logs = logDaily(c, [], 12, () => false, () => null, () => null, (no, id, n) => (no === 2 && id === 'bench' && n.pos === 1 ? 2 : null));   // 세션 2(2단계 42kg) → 3단계
+  const sim = L.simulate(c, logs, null, { until: L.toNum(TODAY) + 40, minSessions: 4 });
+  const rows = [...sim.days.values()].filter((e) => e.kind === 'log' && e.no === 2 && e.type === 'S').map((e) => e.rows.find((r) => r.id === 'bench'));
+  assert.deepEqual(rows.map((r) => r1(r.w)), [44.1, 44.1, 44.1]);
+  assert.equal(r1(rows[0].plan), 42);
+  assert.equal(r1(sim.view(3).acc.bench.w), 42);   // 3단계를 마쳐 새 묶음: 2단계 무게(42kg)부터
+});

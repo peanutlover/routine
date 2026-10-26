@@ -239,7 +239,10 @@ const RoutineLogic = (() => {
       return Object.assign(base, { stage: m.step + 1, top: n >= 3 && m.step === n - 1, reps: ladderReps(cfg.main, m.step),
         rq: { dl: ladderReps(cfg.main, m.step, ro.dl || 0), sq: ladderReps(cfg.main, m.step, ro.sq || 0) }, rstep: m.step });
     }
-    return Object.assign(base, { stage: m.level - m.start + 1, top: m.level === m.start + MAIN_STAGES - 1, reps: cfg.main.reps });
+    // 횟수 고정: 묶음 안의 단계(0부터)와 단계마다의 무게 (−2단계 ~ 4단계, 기록할 때 단계를 옮길 수 있게)
+    const ws = {};
+    for (const id of LIFTS) ws[id] = Array.from({ length: MAIN_STAGES + 2 }, (_, i) => ({ t: i - 2, w: liftW(cfg, an[id], m.start + i - 2) }));
+    return Object.assign(base, { stage: m.level - m.start + 1, top: m.level === m.start + MAIN_STAGES - 1, reps: cfg.main.reps, rstep: m.level - m.start, ws });
   }
   // 보조 종목의 세션 처방. off = 아직 들어가지 않은 종목, skip = 하체가 마지막 단계(횟수 고정은 4단계)인 세션이라 쉼.
   function accPresc(cfg, a, s, no, top) {
@@ -249,7 +252,9 @@ const RoutineLogic = (() => {
     if (s.mode === 'band') return Object.assign(base, { band: true, w: null, n: 0, reps: a.reps, bands: (a.bands || []).slice() });
     if (a.prog === 'r') {
       const w = stepW(cfg, a, s.mode, s.w, s.step);
-      return Object.assign(base, { w, n: s.n + s.step, reps: a.reps, maxed: isTop(cfg, s.mode, w) });
+      // 무게 사다리의 단계마다 무게 (−2단계 ~ 마지막 단계, 기록할 때 단계를 옮길 수 있게. 무게 생략이면 없음)
+      const ws = s.w == null ? null : Array.from({ length: ACC_TOP + 3 }, (_, i) => ({ t: i - 2, w: stepW(cfg, a, s.mode, s.w, i - 2) }));
+      return Object.assign(base, { w, n: s.n + s.step, reps: a.reps, maxed: isTop(cfg, s.mode, w), ws });
     }
     return Object.assign(base, { w: s.w, n: s.n, reps: ladderReps(a, s.step, s.ro || 0), maxed: isTop(cfg, s.mode, s.w) });
   }
@@ -363,7 +368,7 @@ const RoutineLogic = (() => {
     return {
       id: type === 'D' ? 'dl' : 'sq', name: type === 'D' ? '데드리프트' : '스쿼트', part: '하체', main: true, mode: 'barbell',
       w: type === 'D' ? mp.dl : mp.sq, n: 0, reps: mp.rq ? mp.rq[type === 'D' ? 'dl' : 'sq'] : mp.reps, sets: cfg.main.sets, rest: cfg.main.rest, retry: mp.retry,
-      prog: cfg.main.prog, rstep: mp.rstep, lad: cfg.main.prog === 'w' ? ladderOf(cfg.main) : null,
+      prog: cfg.main.prog, rstep: mp.rstep, lad: cfg.main.prog === 'w' ? ladderOf(cfg.main) : null, wlad: mp.ws ? mp.ws[type === 'D' ? 'dl' : 'sq'] : null,
     };
   }
   function accRow(a, p) {
@@ -371,7 +376,7 @@ const RoutineLogic = (() => {
     return {
       id: a.id, name: p.name, part: a.part, mode: p.mode, w: p.w, n: p.n, inc: p.inc, incV: p.incV, prog: p.prog,
       reps: p.reps, sets: a.sets, rest: a.rest, retry: p.retry, maxed: p.maxed, band: p.band, bands: p.bands, stack: a.stack || [],
-      rstep: p.step, lad: a.prog === 'w' && !p.band ? ladderOf(a) : null,
+      rstep: p.step, lad: a.prog === 'w' && !p.band ? ladderOf(a) : null, wlad: p.ws || null,
     };
   }
 
@@ -593,6 +598,13 @@ const RoutineLogic = (() => {
           r.planT = r.rstep; r.planR = r.reps;
           setState(r, (st) => Object.assign(st, { step: t, ro: r.main ? Object.assign({}, st.ro, { [r.id]: 0 }) : 0 }));
           r.rstep = t; r.reps = ladderReps({ ladder: r.lad }, t);
+        } else if (r.wlad && Number.isInteger(T) && T !== r.rstep) {
+          // 횟수 고정: 무게 사다리의 그 단계(그 단계의 계획 무게)부터 묶음을 이어 간다. 하체는 데드리프트·스쿼트가 같이.
+          const x = r.wlad.find((o) => o.t === T) || r.wlad[0];
+          r.planT = r.rstep; r.w0 = r.w;
+          setState(r, (st) => Object.assign(st, r.main ? { level: st.start + x.t } : { step: x.t }));
+          r.rstep = x.t; r.w = x.w;
+          if (r.main) info.main = Object.assign({}, info.main, { [r.id]: x.w });
         }
         if (!(R > 0) || R === r.reps) continue;
         const P = r.reps;
@@ -602,6 +614,8 @@ const RoutineLogic = (() => {
         setState(r, (st) => Object.assign(st, { ro: r.main ? Object.assign({}, st.ro, { [r.id]: ((st.ro || {})[r.id] || 0) + R - P }) : (st.ro || 0) + R - P }));
       }
       if (lg.w) overrideW(info, lg.w);
+      // 단계를 옮겼으면 "계획"은 옮기기 전 무게로 보여준다
+      for (const r of info.rows) if (r.w0 != null) { if (Math.abs(r.w - r.w0) >= 0.005) r.plan = r.w0; else delete r.plan; delete r.w0; }
     }
     function overrideW(info, ov) {
       for (const r of info.rows) {

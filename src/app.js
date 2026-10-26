@@ -683,8 +683,10 @@
     const rows = info.rows.filter((r) => r.avail === 'ok').map((r) => {
       if (!dr) return r;
       const x = Object.assign({}, r);
-      if (dr.w[r.id] > 0 && !r.band && r.w != null) x.w = dr.w[r.id];
       if (r.lad && Number.isInteger(dr.t[r.id])) x.reps = L.ladderReps({ ladder: r.lad }, dr.t[r.id]);
+      const at = r.wlad && Number.isInteger(dr.t[r.id]) ? r.wlad.find((o) => o.t === dr.t[r.id]) : null;
+      if (at) x.w = at.w;
+      if (dr.w[r.id] > 0 && !r.band && r.w != null) x.w = dr.w[r.id];
       if (dr.r[r.id] > 0) x.reps = dr.r[r.id];
       if (dr.e[r.id] > 0) x.sets = dr.e[r.id];
       return x;
@@ -1054,18 +1056,18 @@
       const canW = !r.band && r.w != null;
       const pl0 = planOf(r);
       const ch = changedOf(r, pl0);
-      const cur = Object.assign({}, r, { w: ch.w != null ? ch.w : pl0.w, reps: ch.reps || ch.P, sets: ch.sets || pl0.sets, plan: undefined, planR: undefined, planE: undefined, planT: undefined });
+      const cur = Object.assign({}, r, { w: ch.w != null ? ch.w : ch.Pw, reps: ch.reps || ch.P, sets: ch.sets || pl0.sets, plan: undefined, planR: undefined, planE: undefined, planT: undefined });
       const any = ch.w != null || ch.reps || ch.sets || ch.t != null;
-      const planTxt = `${canW ? L.fmtW(Object.assign({}, r, { w: pl0.w })) + ' · ' : ''}${r.lad ? stepName(pl0.step) + ' ' : ''}${pl0.reps}회 × ${pl0.sets}세트`;
+      const planTxt = `${r.lad || r.wlad ? stepName(pl0.step) + ' ' : ''}${canW ? L.fmtW(Object.assign({}, r, { w: pl0.w })) + ' · ' : ''}${pl0.reps}회 × ${pl0.sets}세트`;
       const pl = plates(cur);
       h += `<div class="lrow"><div><div class="nm">${esc(r.name)}${flags(cur)}</div><div class="rx"><b>${wHtml(cur)}</b> · ${cur.reps}회 × ${cur.sets}세트${any ? ` <span class="planw">계획 ${esc(planTxt)}</span>` : ''}</div>
         ${pl ? `<div class="rx pl-line"><span class="pl">${pl.label}</span>${esc(pl.text)}</div>` : ''}${pl && pl.unbalanced ? `<div class="rx bal">${BALANCE_NOTE}</div>` : ''}
-        ${!sheet.ew.has(r.id) ? `<button type="button" class="linkbtn" data-act="lwOpen" data-id="${esc(r.id)}">${[canW ? '무게' : '', r.lad ? '단계' : '', '횟수·세트'].filter(Boolean).join('·')} 바꾸기</button>` : ''}</div>
+        ${!sheet.ew.has(r.id) ? `<button type="button" class="linkbtn" data-act="lwOpen" data-id="${esc(r.id)}">${[r.lad || r.wlad ? '단계' : '', canW ? '무게' : '', '횟수·세트'].filter(Boolean).join('·')} 바꾸기</button>` : ''}</div>
         <div class="seg" role="group" aria-label="${esc(r.name)} 결과">
           <button type="button" class="y" data-act="res" data-id="${esc(r.id)}" data-v="1" aria-pressed="${v === true}">성공</button>
           <button type="button" class="n" data-act="res" data-id="${esc(r.id)}" data-v="0" aria-pressed="${v === false}">실패</button>
-        </div>${sheet.ew.has(r.id) ? `<div class="lw">${r.lad ? stepSelect(r, pl0, ch) : ''}<div class="lwf">
-          ${canW ? `<label class="field"><span>무게 (kg)</span><input type="number" inputmode="decimal" step="0.5" min="0" id="lw-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="w" value="${ch.w != null ? ch.w : L.roundW(pl0.w)}"></label>` : ''}
+        </div>${sheet.ew.has(r.id) ? `<div class="lw">${r.lad || r.wlad ? stepSelect(r, pl0, ch) : ''}<div class="lwf">
+          ${canW ? `<label class="field"><span>무게 (kg)</span><input type="number" inputmode="decimal" step="0.5" min="0" id="lw-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="w" value="${ch.w != null ? ch.w : L.roundW(ch.Pw)}"></label>` : ''}
           <label class="field"><span>횟수</span><input type="number" inputmode="numeric" step="1" min="1" id="lr-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="r" value="${cur.reps}"></label>
           <label class="field"><span>세트</span><input type="number" inputmode="numeric" step="1" min="1" id="le-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="e" value="${cur.sets}"></label></div>
           <div class="lwfoot"><span class="small">저장하면 기록에 남아요</span><button type="button" class="btn ghost" data-act="lwReset" data-id="${esc(r.id)}">계획대로</button></div>
@@ -1094,28 +1096,42 @@
     step: r.planT != null ? r.planT : r.rstep });
   const stepName = (t) => (t >= 0 ? `${t + 1}단계` : `${-t}단계 낮춤`);
   // 계획(pl0)과 다르게 고른 단계·무게·횟수·세트 (같으면 null). P = 고른 단계의 계획 횟수(바꾼 횟수는 이것과 비교).
+  // 단계를 옮기면: 무게 고정은 그 단계의 횟수(P), 횟수 고정은 그 단계의 무게(Pw)가 새 계획이다.
   function changedOf(r, pl0) {
     const id = r.id, n = (v, p) => (Number.isInteger(v) && v >= 1 && v !== p ? v : null);
-    const t = r.lad && Number.isInteger(sheet.t[id]) && sheet.t[id] !== pl0.step ? sheet.t[id] : null;
-    const P = t != null ? L.ladderReps({ ladder: r.lad }, t) : pl0.reps;
-    return { t, P, w: !r.band && r.w != null ? changedW(id, pl0.w) : null, reps: n(sheet.r[id], P), sets: n(sheet.e[id], pl0.sets) };
+    const t = (r.lad || r.wlad) && Number.isInteger(sheet.t[id]) && sheet.t[id] !== pl0.step ? sheet.t[id] : null;
+    const P = t != null && r.lad ? L.ladderReps({ ladder: r.lad }, t) : pl0.reps;
+    const at = t != null && r.wlad ? r.wlad.find((o) => o.t === t) : null;
+    const Pw = at ? at.w : pl0.w;
+    return { t, P, Pw, w: !r.band && r.w != null ? changedW(id, Pw) : null, reps: n(sheet.r[id], P), sets: n(sheet.e[id], pl0.sets) };
   }
   // 횟수 단계 고르기 (무게 고정 종목)
+  // 단계 고르기: 무게 고정은 횟수 단계, 횟수 고정은 무게 단계
   function stepSelect(r, pl0, ch) {
-    const cur = ch.t != null ? ch.t : pl0.step, top = r.lad.length - 1, x = { ladder: r.lad };
-    let o = '';
-    for (let t = Math.min(-2, pl0.step, cur); t <= top; t++) {
-      if (t < 0 && L.ladderReps(x, t) === L.ladderReps(x, t + 1)) continue;
-      o += `<option value="${t}" ${t === cur ? 'selected' : ''}>${stepName(t)} · ${L.ladderReps(x, t)}회${t === pl0.step ? ' (계획)' : ''}</option>`;
-    }
-    return `<label class="field"><span>횟수 단계${r.main ? ' (데드리프트·스쿼트 같이)' : ''}</span><select id="lt-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="t">${o}</select></label>`;
+    const cur = ch.t != null ? ch.t : pl0.step;
+    const opts = [];
+    if (r.lad) {
+      const x = { ladder: r.lad };
+      for (let t = Math.min(-2, pl0.step, cur); t <= r.lad.length - 1; t++) opts.push({ t, v: L.ladderReps(x, t), text: `${L.ladderReps(x, t)}회` });
+    } else for (const o of r.wlad) opts.push({ t: o.t, v: L.roundW(o.w), text: L.fmtW(Object.assign({}, r, { w: o.w })) });
+    if (!opts.some((o) => o.t === pl0.step)) opts.push({ t: pl0.step, v: null, text: '' });
+    let h = '';
+    opts.sort((a, b) => a.t - b.t).forEach((o, i, all) => {
+      // 첫 단계 아래에서 위 단계와 같아지는 칸(가장 가벼운 덤벨, 1회 등)은 뺀다
+      if (o.t < 0 && all[i + 1] && all[i + 1].v === o.v && o.t !== pl0.step && o.t !== cur) return;
+      h += `<option value="${o.t}" ${o.t === cur ? 'selected' : ''}>${stepName(o.t)}${o.text ? ` · ${esc(o.text)}` : ''}${o.t === pl0.step ? ' (계획)' : ''}</option>`;
+    });
+    return `<label class="field"><span>${r.lad ? '횟수 단계' : '무게 단계'}${r.main ? ' (데드리프트·스쿼트 같이)' : ''}</span><select id="lt-${esc(r.id)}" data-lw="${esc(r.id)}" data-lf="t">${h}</select></label>`;
   }
   // 바꾼 값이 다음 계산에 어떻게 쓰이는지
   function changeHints(r, pl0, ch) {
     const out = [];
     const W = (w) => esc(L.fmtW(Object.assign({}, r, { w })));
+    if (ch.t != null && r.wlad) {
+      out.push(`단계: ${stepName(ch.t)}(${W(ch.Pw)})로 옮겨요${r.main ? '(데드리프트·스쿼트 같이)' : ''}. 이 세션의 남은 운동과 다음 세션도 이 단계에서 이어 가요.${r.main ? ' 상체·팔이 쉬는지는 이 세션은 그대로예요.' : ''}`);
+    }
     if (ch.w != null) {
-      out.push(ch.w > pl0.w ? `무게: 성공하면 이 세션의 남은 운동과 다음 세션을 ${W(ch.w)}에서 이어 가고, 실패하면 계획 무게(${W(pl0.w)})로 실패한 것으로 봐요.`
+      out.push(ch.w > ch.Pw ? `무게: 성공하면 이 세션의 남은 운동과 다음 세션을 ${W(ch.w)}에서 이어 가고, 실패하면 계획 무게(${W(ch.Pw)})로 실패한 것으로 봐요.`
         : `무게: 성공·실패 모두 이 세션의 남은 운동과 다음 세션을 ${W(ch.w)}에서 이어 가요.`);
     }
     if ((ch.reps || ch.t != null) && r.lad) {
@@ -1532,7 +1548,7 @@
       <li>한 세션(운동 6회)을 하는 동안 2일 이상 쉬었다면 세션 뒤 정식 휴식은 건너뛰어요.</li>
       <li>한 종목을 ${L.GAP1}일 이상 쉬면(그 종목을 마지막으로 한 다음 날부터 센 날 수) 성공·실패와 상관없이 그 종목의 세션을 처음부터 다시 하고 한 단계 낮춰요. 횟수 고정은 무게 한 단계(−5% 등), 무게 고정은 횟수 한 단계예요. ${L.GAP2}일 이상이면 한 단계 더 낮춰요. 그 뒤로도 실패하면 다음 세션에 한 단계 낮추는 건 그대로예요.</li>
       <li>하체는 데드리프트·스쿼트 중 더 오래 쉰 쪽으로 세고, 하체 세션을 처음부터 다시 하면 그 세션의 상체·팔도 처음부터 해요(무게는 종목마다 쉰 날 수대로). 상체·팔이 쉬는 하체 마지막 단계 세션은 쉬는 날로 세지 않고, 고무밴드는 낮추지 않아요. 쉰 지 ${L.GAP1 - 2}·${L.GAP1 - 1}일째 되는 날엔 이번 주 화면 위에 알려줘요.</li>
-      <li>기록할 때 종목마다 <b>바꾸기</b>로 실제로 한 대로 넣을 수 있어요. 무게 고정 종목은 횟수 단계를 옮길 수 있고(그 단계부터 계획을 이어 감), 바꾼 횟수에서는 원래 간격만큼 오르내려요(성공·실패 모두). 세트는 그날 기록에만 남고, 저장하기 전에 바꿔 둔 세트는 휴식 타이머도 따라가요. 계획보다 무겁게 해서 성공하면 그 무게에서, 실패하면 계획 무게에서 이어 가요. 가볍게 했으면 성공·실패 모두 그 무게에서 이어 가요(그 세션의 남은 운동도).</li>
+      <li>기록할 때 종목마다 <b>바꾸기</b>로 실제로 한 대로 넣을 수 있어요. 단계를 옮길 수 있어요(무게 고정은 횟수 단계, 횟수 고정은 무게 단계, 그 단계부터 계획을 이어 감. 하체는 데드리프트·스쿼트 같이), 바꾼 횟수에서는 원래 간격만큼 오르내려요(성공·실패 모두). 세트는 그날 기록에만 남고, 저장하기 전에 바꿔 둔 세트는 휴식 타이머도 따라가요. 계획보다 무겁게 해서 성공하면 그 무게에서, 실패하면 계획 무게에서 이어 가요. 가볍게 했으면 성공·실패 모두 그 무게에서 이어 가요(그 세션의 남은 운동도).</li>
       <li>휴식일에도 운동했다면 기록할 수 있고, 기록하면 운동한 날로 계산해요.</li>
       <li>이미 하던 루틴이면 시작 지점을 그 세션·순서·무게로 옮기고, 그 뒤 지난 날들을 날짜순으로 기록해 이어가요.</li>
       <li>스쿼트 시작 무게는 따로 넣을 수 있어요(비워 두면 추천 무게 = 데드리프트 ÷ 1.2). 둘은 한 묶음으로 같은 단계를 같이 오르내려요. 하체를 하나라도 실패하면 다음 세션은 한 단계 낮춰 다시 해요.</li>
@@ -1911,7 +1927,7 @@
       if (t.value !== '' && !ok) { toast(f === 'w' ? '무게를 확인해 주세요' : `${f === 'r' ? '횟수' : '세트'}는 1~100 사이 정수로 넣어 주세요`); renderSheet(model(weekMon + 6)); return; }
       if (t.value === '') delete box[id]; else box[id] = v;
       // 단계를 옮기면 횟수는 그 단계의 횟수부터 다시 고른다
-      if (f === 't') delete sheet.r[id];
+      if (f === 't') { delete sheet.r[id]; delete sheet.w[id]; }
       keepDraft();
       renderSheet(model(weekMon + 6));
     }
